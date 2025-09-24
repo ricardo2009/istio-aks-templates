@@ -1,0 +1,96 @@
+# =============================================================================
+# Gateway Template - Fully Parametrized for AKS Istio Add-on
+# =============================================================================
+# Este template é completamente genérico e reutilizável para múltiplas aplicações
+# e esteiras de CI/CD. Todos os valores são parametrizados via values.yaml.
+#
+# IMPORTANTE - AKS Istio Add-on específico:
+# - Control plane namespace: aks-istio-system (não istio-system)
+# - Gateway namespace: aks-istio-ingress (não istio-system)
+# - External selector: aks-istio-ingressgateway-external
+# - Internal selector: aks-istio-ingressgateway-internal
+
+{{- range $gatewayName, $gateway := .Values.trafficManagement.gateway.instances }}
+{{- if $gateway.enabled }}
+---
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: {{ $gatewayName }}
+  namespace: {{ $gateway.namespace | default $.Values.global.namespace }}
+  labels:
+    app: {{ $.Values.global.app }}
+    version: {{ $.Values.global.version }}
+    environment: {{ $.Values.global.environment }}
+    gateway-type: {{ $gateway.type | default "external" }}
+    managed-by: {{ $.Values.global.managedBy | default "istio-templates" }}
+    {{- with $gateway.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- if or $gateway.annotations $.Values.global.annotations }}
+  annotations:
+    {{- with $.Values.global.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with $gateway.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    istio-templates.io/category: "traffic-management"
+    istio-templates.io/component: "gateway"
+    istio-templates.io/description: {{ $gateway.description | default (printf "Gateway %s for %s" $gatewayName $.Values.global.app) | quote }}
+  {{- end }}
+spec:
+  # AKS Istio Add-on Gateway Selectors
+  selector:
+    istio: {{ $gateway.selector | default "aks-istio-ingressgateway-external" }}
+  
+  servers:
+  {{- range $serverName, $server := $gateway.servers }}
+  - port:
+      number: {{ $server.port | default 80 }}
+      name: {{ $server.name | default $serverName }}
+      protocol: {{ $server.protocol | default "HTTP" }}
+    hosts:
+    {{- if $server.hosts }}
+    {{- range $server.hosts }}
+    - {{ . }}
+    {{- end }}
+    {{- else }}
+    - "*"
+    {{- end }}
+    {{- if eq ($server.protocol | default "HTTP") "HTTP" }}
+    {{- if $server.httpsRedirect }}
+    httpsRedirect: {{ $server.httpsRedirect }}
+    {{- end }}
+    {{- end }}
+    {{- if $server.tls }}
+    tls:
+      mode: {{ $server.tls.mode | default "SIMPLE" }}
+      {{- if $server.tls.credentialName }}
+      credentialName: {{ $server.tls.credentialName }}
+      {{- end }}
+      {{- if $server.tls.caCertificates }}
+      caCertificates: {{ $server.tls.caCertificates }}
+      {{- end }}
+      {{- if $server.tls.serverCertificate }}
+      serverCertificate: {{ $server.tls.serverCertificate }}
+      {{- end }}
+      {{- if $server.tls.privateKey }}
+      privateKey: {{ $server.tls.privateKey }}
+      {{- end }}
+      {{- if $server.tls.minProtocolVersion }}
+      minProtocolVersion: {{ $server.tls.minProtocolVersion }}
+      {{- end }}
+      {{- if $server.tls.maxProtocolVersion }}
+      maxProtocolVersion: {{ $server.tls.maxProtocolVersion }}
+      {{- end }}
+      {{- if $server.tls.cipherSuites }}
+      cipherSuites:
+      {{- range $server.tls.cipherSuites }}
+      - {{ . }}
+      {{- end }}
+      {{- end }}
+    {{- end }}
+  {{- end }}
+{{- end }}
+{{- end }}

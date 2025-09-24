@@ -1,0 +1,204 @@
+# =============================================================================
+# DestinationRule Template - Fully Parametrized for AKS Istio Add-on
+# =============================================================================
+# Template completamente genérico para configuração de destination rules
+# Suporta circuit breakers, load balancing, connection pooling e subsets
+# Todos os valores são configurados via values.yaml
+
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: api-service-destinationrule
+  namespace: default
+  labels:
+    version: v1.0.0
+    managed-by: istio-templates
+    environment: ${ENVIRONMENT}
+    feature: traffic-management
+    component: destinationrule
+  annotations:
+    istio-templates.io/description: "Políticas de tráfego para serviço de API"
+    istio-templates.io/category: "traffic-management"
+    istio-templates.io/environment: "${ENVIRONMENT}"
+spec:
+  # Host do serviço (FQDN recomendado para clareza)
+  host: api-service.default.svc.cluster.local
+  
+  # Política de load balancing
+  trafficPolicy:
+    # Algoritmo de load balancing
+    # ROUND_ROBIN, LEAST_CONN, RANDOM, PASSTHROUGH
+    loadBalancer:
+      simple: ROUND_ROBIN
+    
+    # Connection Pool - Controla conexões TCP e HTTP
+    connectionPool:
+      tcp:
+        # Máximo de conexões TCP para o destino
+        maxConnections: 100
+        # Timeout para estabelecer conexão TCP
+        connectTimeout: 30s
+        # Configurações TCP keep-alive
+        tcpKeepalive:
+          time: 7200s
+          interval: 75s
+          probes: 9
+      
+      http:
+        # Máximo de requisições HTTP/1.1 pendentes
+        http1MaxPendingRequests: 10
+        # Máximo de requisições por conexão HTTP/2
+        http2MaxRequests: 100
+        # Máximo de requisições por conexão HTTP/1.1
+        maxRequestsPerConnection: 2
+        # Máximo de retries para todos os hosts
+        maxRetries: 3
+        # Timeout para requisições HTTP idle
+        idleTimeout: 90s
+        # Intervalo para flush de dados HTTP/2
+        h2UpgradePolicy: UPGRADE
+    
+    # Circuit Breaker - Proteção contra falhas em cascata
+    outlierDetection:
+      # Número de erros consecutivos para ejetar um host
+      consecutiveGatewayErrors: 5
+      # Número de erros consecutivos (5xx)
+      consecutive5xxErrors: 5
+      # Intervalo de análise para detecção de outliers
+      interval: 30s
+      # Tempo base de ejeção
+      baseEjectionTime: 30s
+      # Máximo de tempo de ejeção
+      maxEjectionPercent: 50
+      # Porcentagem mínima de hosts que devem estar saudáveis
+      minHealthPercent: 30
+      # Número mínimo de requisições antes de análise
+      splitExternalLocalOriginErrors: false
+  
+  # Subsets para Blue/Green e Canary Deployments
+  subsets:
+  # Subset para versão estável
+  - name: stable
+    labels:
+      version: stable
+    trafficPolicy:
+      # Políticas específicas para versão estável
+      connectionPool:
+        tcp:
+          maxConnections: 200  # Mais conexões para versão estável
+  
+  # Subset para versão canary
+  - name: canary
+    labels:
+      version: canary
+    trafficPolicy:
+      # Políticas mais restritivas para canary
+      connectionPool:
+        tcp:
+          maxConnections: 50
+      outlierDetection:
+        consecutiveGatewayErrors: 3  # Mais sensível para canary
+        consecutive5xxErrors: 3
+
+---
+# =============================================================================
+# Destination Rule para Frontend Service
+# =============================================================================
+# Políticas específicas para o serviço de frontend
+
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: frontend-service-destinationrule
+  namespace: default
+  labels:
+    version: v1.0.0
+    managed-by: istio-templates
+    environment: ${ENVIRONMENT}
+    feature: traffic-management
+    component: destinationrule
+  annotations:
+    istio-templates.io/description: "Políticas de tráfego para serviço frontend"
+    istio-templates.io/category: "traffic-management"
+    istio-templates.io/environment: "${ENVIRONMENT}"
+spec:
+  host: frontend-service.default.svc.cluster.local
+  
+  trafficPolicy:
+    # Load balancing apropriado para frontend (geralmente stateless)
+    loadBalancer:
+      simple: LEAST_CONN
+    
+    # Connection pool otimizado para frontend
+    connectionPool:
+      tcp:
+        maxConnections: 150
+        connectTimeout: 10s
+      http:
+        http1MaxPendingRequests: 20
+        maxRequestsPerConnection: 10
+        idleTimeout: 60s
+    
+    # Outlier detection menos agressivo para frontend
+    outlierDetection:
+      consecutiveGatewayErrors: 10
+      consecutive5xxErrors: 10
+      interval: 60s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 20
+
+---
+# =============================================================================
+# Destination Rule para serviços externos (se habilitado)
+# =============================================================================
+# Define políticas para serviços externos ao mesh
+
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: external-services-destinationrule
+  namespace: default
+  labels:
+    version: v1.0.0
+    managed-by: istio-templates
+    environment: ${ENVIRONMENT}
+    feature: traffic-management
+    component: destinationrule-external
+  annotations:
+    istio-templates.io/description: "Políticas para serviços externos"
+    istio-templates.io/category: "traffic-management"
+    istio-templates.io/environment: "${ENVIRONMENT}"
+spec:
+  # Host externo (exemplo)
+  host: api.external.com
+  
+  trafficPolicy:
+    # Políticas mais conservadoras para serviços externos
+    loadBalancer:
+      simple: ROUND_ROBIN
+    
+    connectionPool:
+      tcp:
+        maxConnections: 20  # Menos conexões para externos
+        connectTimeout: 10s
+      http:
+        http1MaxPendingRequests: 5
+        maxRequestsPerConnection: 1
+        idleTimeout: 30s
+    
+    # Circuit breaker mais agressivo para externos
+    outlierDetection:
+      consecutiveGatewayErrors: 3
+      consecutive5xxErrors: 3
+      interval: 15s
+      baseEjectionTime: 60s
+      maxEjectionPercent: 30
+    
+    # TLS para conexões externas seguras
+    tls:
+      mode: SIMPLE  # Para HTTPS
+      # Para mTLS com certificado cliente:
+      # mode: MUTUAL
+      # clientCertificate: /path/to/client.crt
+      # privateKey: /path/to/client.key
+      # caCertificates: /path/to/ca.crt

@@ -1,0 +1,73 @@
+# =============================================================================
+# YAMLLINT CONFIGURATION - ENTERPRISE ISTIO TEMPLATES
+# =============================================================================
+# Configuração de altíssimo nível para linting de YAML files
+
+extends: default
+
+rules:
+  # Line length - ajustado para templates com expressões longas
+  line-length:
+    max: 120
+    level: warning
+  
+  # Indentação - padrão para Kubernetes YAML
+  indentation:
+    spaces: 2
+    indent-sequences: true
+    check-multi-line-strings: false
+  
+  # Comentários - permitir comentários sem espaço após #
+  comments:
+    min-spaces-from-content: 1
+    require-starting-space: true
+  
+  # Documentos - permitir múltiplos documentos em um arquivo
+  document-start:
+    present: false
+  
+  # Strings - permitir aspas duplas para templates
+  quoted-strings:
+    quote-type: any
+    required: only-when-needed
+  
+  # Chaves duplicadas - erro crítico
+  key-duplicates: enable
+  
+  # Espaços em branco
+  trailing-spaces: enable
+  empty-lines:
+    max: 2
+    max-start: 1
+    max-end: 1
+  
+  # Brackets e colchetes
+  brackets:
+    max-spaces-inside: 1
+    min-spaces-inside: 0
+  
+  braces:
+    max-spaces-inside: 1
+    min-spaces-inside: 0
+  
+  # Permitir valores vazios para templates condicionais
+  empty-values:
+    forbid-in-block-mappings: false
+    forbid-in-flow-mappings: false
+  
+  # Permitir chaves não ordenadas (comum em Kubernetes)
+  key-ordering: disable
+  
+  # Permitir linhas de octal (comum em permissões)
+  octal-values:
+    forbid-implicit-octal: true
+    forbid-explicit-octal: false
+
+# Padrões de arquivo para ignorar
+ignore: |
+  .generated/
+  .cache/
+  node_modules/
+  .git/
+  *.tmp
+  *.temp

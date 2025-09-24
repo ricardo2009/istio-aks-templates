@@ -1,0 +1,259 @@
+# =============================================================================
+# Authorization Policy - Controle de acesso baseado em identidade e atributos
+# =============================================================================
+# Define políticas de autorização que controlam quem pode acessar quais serviços
+# e com que permissões. Compatível com AKS Istio add-on gerenciado.
+#
+# Template processado pelo apply.sh usando yq e envsubst
+# Variáveis disponíveis: $ENVIRONMENT, $VALUES_FILE
+
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: api-service-authorization
+  namespace: default
+  labels:
+    version: v1.0.0
+    managed-by: istio-templates
+    environment: ${ENVIRONMENT}
+    feature: security
+    component: authorization-policy
+  annotations:
+    istio-templates.io/description: "Política de autorização para API service"
+    istio-templates.io/category: "security"
+    istio-templates.io/environment: "${ENVIRONMENT}"
+spec:
+  # Seletor para aplicar política a workload específico
+  selector:
+    matchLabels:
+      app: api-service
+  
+  # Regras de autorização (ALLOW por padrão se especificadas)
+  rules:
+  # Regra 1: Permite acesso do frontend
+  - from:
+    - source:
+        principals: ["cluster.local/ns/default/sa/frontend-service-account"]
+    to:
+    - operation:
+        methods: ["GET", "POST", "PUT"]
+        paths: ["/api/v1/*"]
+    when:
+    - key: request.headers[content-type]
+      values: ["application/json"]
+  
+  # Regra 2: Permite health checks de qualquer lugar
+  - to:
+    - operation:
+        methods: ["GET"]
+        paths: ["/health", "/ready", "/metrics"]
+  
+  # Regra 3: Permite acesso admin apenas de namespace específico
+  - from:
+    - source:
+        namespaces: ["admin"]
+    to:
+    - operation:
+        methods: ["GET", "POST", "PUT", "DELETE"]
+        paths: ["/api/admin/*"]
+
+---
+# =============================================================================
+# Authorization Policy - Deny All (Política padrão restritiva)
+# =============================================================================
+# Nega todo tráfego por padrão, requer políticas ALLOW explícitas
+
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: deny-all-default
+  namespace: default
+  labels:
+    version: v1.0.0
+    managed-by: istio-templates
+    environment: ${ENVIRONMENT}
+    feature: security
+    component: authorization-policy-deny
+  annotations:
+    istio-templates.io/description: "Política padrão que nega todo acesso"
+    istio-templates.io/category: "security"
+    istio-templates.io/environment: "${ENVIRONMENT}"
+spec:
+  # Sem regras = DENY ALL
+  # Esta política nega todo tráfego para workloads no namespace default
+  # Outras políticas ALLOW devem ser criadas explicitamente
+
+---
+# =============================================================================
+# Authorization Policy - Frontend Access
+# =============================================================================
+# Permite que o frontend acesse apenas recursos necessários
+
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: frontend-authorization
+  namespace: default
+  labels:
+    version: v1.0.0
+    managed-by: istio-templates
+    environment: ${ENVIRONMENT}
+    feature: security
+    component: authorization-policy-frontend
+  annotations:
+    istio-templates.io/description: "Política de autorização para frontend"
+    istio-templates.io/category: "security"
+    istio-templates.io/environment: "${ENVIRONMENT}"
+spec:
+  selector:
+    matchLabels:
+      app: frontend-service
+  
+  rules:
+  # Permite acesso do gateway Istio (tráfego externo)
+  - from:
+    - source:
+        principals: ["cluster.local/ns/aks-istio-system/sa/aks-istio-ingressgateway-external-service-account"]
+    to:
+    - operation:
+        methods: ["GET", "POST"]
+        paths: ["/*"]
+  
+  # Permite acesso interno do mesh (outros serviços)
+  - from:
+    - source:
+        principals: ["cluster.local/ns/default/sa/*"]
+    to:
+    - operation:
+        methods: ["GET"]
+        paths: ["/", "/static/*", "/assets/*"]
+
+---
+# =============================================================================
+# Authorization Policy - Database Access (Restritiva)
+# =============================================================================
+# Controla acesso ao banco de dados, permitindo apenas serviços autorizados
+
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: database-authorization
+  namespace: default
+  labels:
+    version: v1.0.0
+    managed-by: istio-templates
+    environment: ${ENVIRONMENT}
+    feature: security
+    component: authorization-policy-database
+  annotations:
+    istio-templates.io/description: "Política restritiva para acesso ao banco"
+    istio-templates.io/category: "security"
+    istio-templates.io/environment: "${ENVIRONMENT}"
+spec:
+  selector:
+    matchLabels:
+      app: database
+  
+  rules:
+  # Apenas API service pode acessar o banco
+  - from:
+    - source:
+        principals: ["cluster.local/ns/default/sa/api-service-account"]
+    to:
+    - operation:
+        methods: ["GET", "POST", "PUT", "DELETE"]
+        ports: ["5432"]  # PostgreSQL
+  
+  # Permite conexões de backup service
+  - from:
+    - source:
+        principals: ["cluster.local/ns/admin/sa/backup-service-account"]
+    to:
+    - operation:
+        methods: ["GET"]
+        ports: ["5432"]
+    when:
+    - key: request.headers[x-backup-token]
+      values: ["backup-authorized"]
+
+---
+# =============================================================================
+# Authorization Policy - Ingress Gateway
+# =============================================================================
+# Controla tráfego externo através do Istio Ingress Gateway
+
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: ingress-gateway-authorization
+  namespace: aks-istio-ingress  # Namespace correto para AKS Istio add-on
+  labels:
+    version: v1.0.0
+    managed-by: istio-templates
+    environment: ${ENVIRONMENT}
+    feature: security
+    component: authorization-policy-ingress
+  annotations:
+    istio-templates.io/description: "Política de autorização para ingress gateway"
+    istio-templates.io/category: "security"
+    istio-templates.io/environment: "${ENVIRONMENT}"
+spec:
+  selector:
+    matchLabels:
+      istio: aks-istio-ingressgateway-external
+  
+  rules:
+  # Permite tráfego HTTP/HTTPS público
+  - to:
+    - operation:
+        methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+        ports: ["80", "443"]
+  
+  # Bloqueia métodos administrativos em produção
+  - to:
+    - operation:
+        methods: ["TRACE", "CONNECT"]
+    when:
+    - key: request.headers[x-environment]
+      values: ["prod"]
+    - key: source.ip
+      notValues: ["10.0.0.0/8"]  # Bloqueia de fora da rede interna
+
+---
+# =============================================================================
+# Authorization Policy - Rate Limiting por IP
+# =============================================================================
+# Implementa rate limiting baseado em IP de origem
+
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: rate-limit-by-ip
+  namespace: default
+  labels:
+    version: v1.0.0
+    managed-by: istio-templates
+    environment: ${ENVIRONMENT}
+    feature: security
+    component: authorization-policy-rate-limit
+  annotations:
+    istio-templates.io/description: "Rate limiting baseado em IP"
+    istio-templates.io/category: "security"
+    istio-templates.io/environment: "${ENVIRONMENT}"
+spec:
+  selector:
+    matchLabels:
+      app: api-service
+  
+  action: CUSTOM
+  provider:
+    name: "rate-limit"
+  
+  rules:
+  # Aplica rate limit para IPs externos
+  - to:
+    - operation:
+        methods: ["POST", "PUT", "DELETE"]
+    when:
+    - key: source.ip
+      notValues: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]

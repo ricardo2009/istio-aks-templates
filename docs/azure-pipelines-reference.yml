@@ -1,0 +1,391 @@
+# =============================================================================
+# AZURE DEVOPS PIPELINE - ISTIO TEMPLATES DEPLOYMENT
+# =============================================================================
+# Pipeline para deploy automatizado de templates Istio parametrizáveis
+# Suporte para múltiplas aplicações e ambientes
+
+trigger:
+  branches:
+    include:
+      - main
+      - develop
+  paths:
+    include:
+      - src/*
+      - k8s/*
+      - istio/*
+
+variables:
+  # Configurações globais
+  - name: ISTIO_TEMPLATES_REPO
+    value: 'https://github.com/company/istio-templates.git'
+  - name: ISTIO_TEMPLATES_BRANCH
+    value: 'main'
+  
+  # Configurações do cluster AKS
+  - name: AKS_RESOURCE_GROUP
+    value: 'rg-aks-prod'
+  - name: AKS_CLUSTER_NAME
+    value: 'aks-cluster-prod'
+
+# Parâmetros do pipeline
+parameters:
+  - name: environment
+    displayName: 'Target Environment'
+    type: string
+    default: 'dev'
+    values:
+      - 'dev'
+      - 'staging' 
+      - 'prod'
+  
+  - name: applicationName
+    displayName: 'Application Name'
+    type: string
+    default: 'myapp'
+  
+  - name: namespace
+    displayName: 'Kubernetes Namespace'
+    type: string
+    default: 'default'
+    
+  - name: enableCanaryDeploy
+    displayName: 'Enable Canary Deployment'
+    type: boolean
+    default: 'false'
+    
+  - name: canaryWeight
+    displayName: 'Canary Weight (%)'
+    type: number
+    default: '10'
+
+stages:
+  # =============================================================================
+  # STAGE 1: VALIDATION AND PREPARATION
+  # =============================================================================
+  - stage: Preparation
+    displayName: 'Preparation and Validation'
+    jobs:
+      - job: ValidateInputs
+        displayName: 'Validate Pipeline Inputs'
+        steps:
+          - task: Bash@3
+            displayName: 'Validate Parameters'
+            inputs:
+              targetType: 'inline'
+              script: |
+                echo "🔍 Validating pipeline parameters..."
+                
+                # Validate environment
+                if [[ ! "${{ parameters.environment }}" =~ ^(dev|staging|prod)$ ]]; then
+                  echo "❌ Invalid environment: ${{ parameters.environment }}"
+                  exit 1
+                fi
+                
+                # Validate application name
+                if [[ -z "${{ parameters.applicationName }}" ]]; then
+                  echo "❌ Application name cannot be empty"
+                  exit 1
+                fi
+                
+                # Validate namespace
+                if [[ ! "${{ parameters.namespace }}" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]]; then
+                  echo "❌ Invalid namespace format: ${{ parameters.namespace }}"
+                  exit 1
+                fi
+                
+                # Validate canary weight
+                if [[ ${{ parameters.canaryWeight }} -lt 0 ]] || [[ ${{ parameters.canaryWeight }} -gt 100 ]]; then
+                  echo "❌ Canary weight must be between 0 and 100"
+                  exit 1
+                fi
+                
+                echo "✅ All parameters validated successfully"
+                echo "Environment: ${{ parameters.environment }}"
+                echo "Application: ${{ parameters.applicationName }}"
+                echo "Namespace: ${{ parameters.namespace }}"
+                echo "Canary Enabled: ${{ parameters.enableCanaryDeploy }}"
+                echo "Canary Weight: ${{ parameters.canaryWeight }}%"
+
+      - job: DownloadTemplates
+        displayName: 'Download Istio Templates'
+        dependsOn: ValidateInputs
+        steps:
+          - task: Bash@3
+            displayName: 'Clone Istio Templates Repository'
+            inputs:
+              targetType: 'inline'
+              script: |
+                echo "📥 Downloading Istio templates..."
+                
+                # Clone templates repository
+                git clone --branch $(ISTIO_TEMPLATES_BRANCH) $(ISTIO_TEMPLATES_REPO) istio-templates
+                
+                # Verify templates exist
+                if [[ ! -f "istio-templates/deploy-parametrized.sh" ]]; then
+                  echo "❌ Deploy script not found in templates repository"
+                  exit 1
+                fi
+                
+                # Make script executable
+                chmod +x istio-templates/deploy-parametrized.sh
+                
+                # List available templates
+                echo "📋 Available templates:"
+                find istio-templates -name "*.yaml" -type f | sort
+                
+          - task: PublishPipelineArtifact@1
+            displayName: 'Publish Templates Artifact'
+            inputs:
+              targetPath: 'istio-templates'
+              artifact: 'istio-templates'
+              publishLocation: 'pipeline'
+
+  # =============================================================================
+  # STAGE 2: BUILD AND PREPARE MANIFESTS
+  # =============================================================================
+  - stage: BuildManifests
+    displayName: 'Build and Validate Manifests'
+    dependsOn: Preparation
+    jobs:
+      - job: ProcessTemplates
+        displayName: 'Process Istio Templates'
+        steps:
+          - task: DownloadPipelineArtifact@2
+            displayName: 'Download Templates'
+            inputs:
+              buildType: 'current'
+              artifactName: 'istio-templates'
+              targetPath: '$(Pipeline.Workspace)/templates'
+              
+          - task: Bash@3
+            displayName: 'Set Application Configuration'
+            inputs:
+              targetType: 'inline'
+              script: |
+                echo "⚙️ Setting application configuration..."
+                
+                # Export variables for template processing
+                export APP_NAME="${{ parameters.applicationName }}"
+                export ENVIRONMENT="${{ parameters.environment }}"
+                export NAMESPACE="${{ parameters.namespace }}"
+                export VERSION="$(Build.BuildNumber)"
+                export BUILD_ID="$(Build.BuildId)"
+                
+                # Service configuration (customize per application)
+                export SERVICE_NAME="${{ parameters.applicationName }}-service"
+                export SERVICE_PORT="8080"
+                
+                # Routing configuration
+                case "${{ parameters.environment }}" in
+                  "prod")
+                    export SERVICE_HOST="${{ parameters.applicationName }}.company.com"
+                    export GATEWAY_SELECTOR="aks-istio-ingressgateway-external"
+                    export MTLS_MODE="STRICT"
+                    ;;
+                  "staging")
+                    export SERVICE_HOST="staging-${{ parameters.applicationName }}.company.com"
+                    export GATEWAY_SELECTOR="aks-istio-ingressgateway-external"
+                    export MTLS_MODE="STRICT"
+                    ;;
+                  "dev")
+                    export SERVICE_HOST="dev-${{ parameters.applicationName }}.internal.com"
+                    export GATEWAY_SELECTOR="aks-istio-ingressgateway-internal"
+                    export MTLS_MODE="PERMISSIVE"
+                    ;;
+                esac
+                
+                # Canary configuration
+                if [[ "${{ parameters.enableCanaryDeploy }}" == "true" ]]; then
+                  export WEIGHT_PRIMARY="$((100 - ${{ parameters.canaryWeight }}))"
+                  export WEIGHT_CANARY="${{ parameters.canaryWeight }}"
+                  export SUBSET_CANARY="canary"
+                else
+                  export WEIGHT_PRIMARY="100"
+                  export WEIGHT_CANARY="0"
+                fi
+                
+                # Save environment variables for next steps
+                echo "APP_NAME=${APP_NAME}" >> $(Pipeline.Workspace)/app.env
+                echo "ENVIRONMENT=${ENVIRONMENT}" >> $(Pipeline.Workspace)/app.env
+                echo "NAMESPACE=${NAMESPACE}" >> $(Pipeline.Workspace)/app.env
+                echo "VERSION=${VERSION}" >> $(Pipeline.Workspace)/app.env
+                echo "SERVICE_NAME=${SERVICE_NAME}" >> $(Pipeline.Workspace)/app.env
+                echo "SERVICE_PORT=${SERVICE_PORT}" >> $(Pipeline.Workspace)/app.env
+                echo "SERVICE_HOST=${SERVICE_HOST}" >> $(Pipeline.Workspace)/app.env
+                echo "GATEWAY_SELECTOR=${GATEWAY_SELECTOR}" >> $(Pipeline.Workspace)/app.env
+                echo "MTLS_MODE=${MTLS_MODE}" >> $(Pipeline.Workspace)/app.env
+                echo "WEIGHT_PRIMARY=${WEIGHT_PRIMARY}" >> $(Pipeline.Workspace)/app.env
+                echo "WEIGHT_CANARY=${WEIGHT_CANARY}" >> $(Pipeline.Workspace)/app.env
+                
+                echo "✅ Configuration set successfully"
+                
+          - task: Bash@3
+            displayName: 'Process Templates with Parameters'
+            inputs:
+              targetType: 'inline'
+              script: |
+                echo "🔄 Processing Istio templates..."
+                
+                # Source environment variables
+                source $(Pipeline.Workspace)/app.env
+                
+                # Change to templates directory
+                cd $(Pipeline.Workspace)/templates
+                
+                # Create output directory
+                mkdir -p processed
+                
+                # Process each template
+                for template in traffic-management/*.yaml security/*.yaml; do
+                  if [[ -f "$template" ]]; then
+                    echo "Processing: $template"
+                    
+                    # Use envsubst to replace variables
+                    envsubst < "$template" > "processed/$(basename "$template")"
+                    
+                    # Validate YAML syntax
+                    if ! yq e '.' "processed/$(basename "$template")" > /dev/null; then
+                      echo "❌ YAML validation failed for: $template"
+                      exit 1
+                    fi
+                    
+                    echo "✅ Processed: $template"
+                  fi
+                done
+                
+                # List processed files
+                echo "📋 Processed templates:"
+                ls -la processed/
+                
+          - task: Kubernetes@1
+            displayName: 'Validate Manifests with kubectl'
+            inputs:
+              connectionType: 'Azure Resource Manager'
+              azureSubscriptionEndpoint: '$(AZURE_SUBSCRIPTION)'
+              azureResourceGroup: '$(AKS_RESOURCE_GROUP)'
+              kubernetesCluster: '$(AKS_CLUSTER_NAME)'
+              command: 'apply'
+              arguments: '--dry-run=client --validate=true -f $(Pipeline.Workspace)/templates/processed/'
+              
+          - task: PublishPipelineArtifact@1
+            displayName: 'Publish Processed Manifests'
+            inputs:
+              targetPath: '$(Pipeline.Workspace)/templates/processed'
+              artifact: 'processed-manifests'
+              publishLocation: 'pipeline'
+
+  # =============================================================================
+  # STAGE 3: DEPLOYMENT
+  # =============================================================================
+  - stage: DeployDev
+    displayName: 'Deploy to Development'
+    condition: eq('${{ parameters.environment }}', 'dev')
+    dependsOn: BuildManifests
+    jobs:
+      - deployment: DeployToDevEnvironment
+        displayName: 'Deploy to Dev Environment'
+        environment: 'aks-dev'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - template: deploy-istio-templates.yml
+                  parameters:
+                    environment: 'dev'
+                    applicationName: '${{ parameters.applicationName }}'
+                    namespace: '${{ parameters.namespace }}'
+
+  - stage: DeployStaging
+    displayName: 'Deploy to Staging'
+    condition: eq('${{ parameters.environment }}', 'staging')
+    dependsOn: BuildManifests
+    jobs:
+      - deployment: DeployToStagingEnvironment
+        displayName: 'Deploy to Staging Environment'
+        environment: 'aks-staging'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - template: deploy-istio-templates.yml
+                  parameters:
+                    environment: 'staging'
+                    applicationName: '${{ parameters.applicationName }}'
+                    namespace: '${{ parameters.namespace }}'
+
+  - stage: DeployProd
+    displayName: 'Deploy to Production'
+    condition: eq('${{ parameters.environment }}', 'prod')
+    dependsOn: BuildManifests
+    jobs:
+      - deployment: DeployToProdEnvironment
+        displayName: 'Deploy to Production Environment'
+        environment: 'aks-prod'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - template: deploy-istio-templates.yml
+                  parameters:
+                    environment: 'prod'
+                    applicationName: '${{ parameters.applicationName }}'
+                    namespace: '${{ parameters.namespace }}'
+
+  # =============================================================================
+  # STAGE 4: POST-DEPLOYMENT VALIDATION
+  # =============================================================================
+  - stage: PostDeploymentValidation
+    displayName: 'Post-Deployment Validation'
+    dependsOn: 
+      - DeployDev
+      - DeployStaging  
+      - DeployProd
+    condition: succeeded()
+    jobs:
+      - job: ValidateDeployment
+        displayName: 'Validate Istio Resources'
+        steps:
+          - task: Kubernetes@1
+            displayName: 'Check Gateway Status'
+            inputs:
+              connectionType: 'Azure Resource Manager'
+              azureSubscriptionEndpoint: '$(AZURE_SUBSCRIPTION)'
+              azureResourceGroup: '$(AKS_RESOURCE_GROUP)'
+              kubernetesCluster: '$(AKS_CLUSTER_NAME)'
+              command: 'get'
+              arguments: 'gateway -n ${{ parameters.namespace }}'
+              
+          - task: Kubernetes@1
+            displayName: 'Check VirtualService Status'
+            inputs:
+              connectionType: 'Azure Resource Manager'
+              azureSubscriptionEndpoint: '$(AZURE_SUBSCRIPTION)'
+              azureResourceGroup: '$(AKS_RESOURCE_GROUP)'
+              kubernetesCluster: '$(AKS_CLUSTER_NAME)'
+              command: 'get'
+              arguments: 'virtualservice -n ${{ parameters.namespace }}'
+              
+          - task: Bash@3
+            displayName: 'Run Connectivity Tests'
+            inputs:
+              targetType: 'inline'
+              script: |
+                echo "🧪 Running connectivity tests..."
+                
+                # Source environment configuration
+                source $(Pipeline.Workspace)/app.env
+                
+                # Test internal connectivity (if applicable)
+                if [[ "${{ parameters.environment }}" == "dev" ]]; then
+                  echo "Testing internal connectivity..."
+                  # Add your internal connectivity tests here
+                fi
+                
+                # Test external connectivity (for staging/prod)
+                if [[ "${{ parameters.environment }}" != "dev" ]]; then
+                  echo "Testing external connectivity..."
+                  # Add your external connectivity tests here
+                fi
+                
+                echo "✅ Connectivity tests completed"

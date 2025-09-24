@@ -1,0 +1,157 @@
+# =============================================================================
+# GATEWAY TEMPLATE - CONFIGURAÇÕES COMPLETAS E CONDICIONAIS
+# =============================================================================
+# Este template contém TODAS as configurações possíveis do Istio Gateway
+# As configurações são aplicadas condicionalmente baseadas nos valores definidos
+# Compatível com AKS Istio Add-on
+
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: ${GATEWAY_NAME}
+  namespace: ${NAMESPACE}
+  labels:
+    app: ${APP_NAME}
+    version: ${VERSION}
+    environment: ${ENVIRONMENT}
+    gateway-type: ${GATEWAY_TYPE:-external}
+    managed-by: ${MANAGED_BY}
+    # Labels condicionais adicionais
+    $(if [ -n "${GATEWAY_TEAM}" ]; then echo "team: ${GATEWAY_TEAM}"; fi)
+    $(if [ -n "${GATEWAY_PROJECT}" ]; then echo "project: ${GATEWAY_PROJECT}"; fi)
+    $(if [ -n "${GATEWAY_COST_CENTER}" ]; then echo "cost-center: ${GATEWAY_COST_CENTER}"; fi)
+  annotations:
+    istio-templates.io/category: "traffic-management"
+    istio-templates.io/component: "gateway"
+    istio-templates.io/description: "${GATEWAY_DESCRIPTION:-Gateway for ${APP_NAME}}"
+    # Annotations condicionais
+    $(if [ -n "${GATEWAY_CERT_MANAGER_ISSUER}" ]; then echo "cert-manager.io/issuer: ${GATEWAY_CERT_MANAGER_ISSUER}"; fi)
+    $(if [ -n "${GATEWAY_EXTERNAL_DNS}" ]; then echo "external-dns.alpha.kubernetes.io/hostname: ${GATEWAY_EXTERNAL_DNS}"; fi)
+    $(if [ -n "${GATEWAY_PROMETHEUS_SCRAPE}" ]; then echo "prometheus.io/scrape: ${GATEWAY_PROMETHEUS_SCRAPE}"; fi)
+spec:
+  selector:
+    istio: ${GATEWAY_SELECTOR:-aks-istio-ingressgateway-external}
+    # Seletores adicionais condicionais
+    $(if [ -n "${GATEWAY_CUSTOM_SELECTOR_KEY}" ]; then echo "${GATEWAY_CUSTOM_SELECTOR_KEY}: ${GATEWAY_CUSTOM_SELECTOR_VALUE}"; fi)
+  
+  servers:
+  # =============================================================================
+  # SERVIDOR HTTPS - CONFIGURAÇÃO COMPLETA
+  # =============================================================================
+  - port:
+      number: 443
+      name: https-${GATEWAY_NAME}
+      protocol: HTTPS
+    hosts:
+    - "${SERVICE_HOST}"
+    $(if [ -n "${SERVICE_HOST_ADDITIONAL}" ]; then echo "    - \"${SERVICE_HOST_ADDITIONAL}\""; fi)
+    $(if [ -n "${SERVICE_HOST_WILDCARD}" ]; then echo "    - \"${SERVICE_HOST_WILDCARD}\""; fi)
+    $(if [ -n "${SERVICE_HOST_API}" ]; then echo "    - \"${SERVICE_HOST_API}\""; fi)
+    $(if [ -n "${SERVICE_HOST_WWW}" ]; then echo "    - \"${SERVICE_HOST_WWW}\""; fi)
+    $(if [ -n "${SERVICE_HOST_STAGING}" ]; then echo "    - \"${SERVICE_HOST_STAGING}\""; fi)
+    tls:
+      mode: ${TLS_MODE:-SIMPLE}  # SIMPLE, MUTUAL, PASSTHROUGH, ISTIO_MUTUAL
+      $(if [ -n "${TLS_CREDENTIAL_NAME}" ]; then echo "      credentialName: ${TLS_CREDENTIAL_NAME}"; fi)
+      $(if [ -n "${TLS_CA_CERTIFICATES}" ]; then echo "      caCertificates: ${TLS_CA_CERTIFICATES}"; fi)
+      $(if [ -n "${TLS_SERVER_CERTIFICATE}" ]; then echo "      serverCertificate: ${TLS_SERVER_CERTIFICATE}"; fi)
+      $(if [ -n "${TLS_PRIVATE_KEY}" ]; then echo "      privateKey: ${TLS_PRIVATE_KEY}"; fi)
+      $(if [ -n "${TLS_MIN_PROTOCOL_VERSION}" ]; then echo "      minProtocolVersion: ${TLS_MIN_PROTOCOL_VERSION}"; fi)
+      $(if [ -n "${TLS_MAX_PROTOCOL_VERSION}" ]; then echo "      maxProtocolVersion: ${TLS_MAX_PROTOCOL_VERSION}"; fi)
+      $(if [ -n "${TLS_CIPHER_SUITES}" ]; then echo "      cipherSuites:"; echo "${TLS_CIPHER_SUITES}" | tr ',' '\n' | sed 's/^/      - /'; fi)
+
+  # =============================================================================
+  # SERVIDOR HTTP - CONFIGURAÇÃO COMPLETA (CONDICIONAL)
+  # =============================================================================
+$(if [ "${HTTP_SERVER_ENABLED:-true}" = "true" ]; then
+cat << 'HTTP_SERVER_EOF'
+  - port:
+      number: 80
+      name: http-${GATEWAY_NAME}
+      protocol: HTTP
+    hosts:
+    - "${SERVICE_HOST}"
+$(if [ -n "${SERVICE_HOST_ADDITIONAL}" ]; then echo "    - \"${SERVICE_HOST_ADDITIONAL}\""; fi)
+$(if [ -n "${SERVICE_HOST_WILDCARD}" ]; then echo "    - \"${SERVICE_HOST_WILDCARD}\""; fi)
+$(if [ "${HTTPS_REDIRECT:-true}" = "true" ]; then echo "    tls:"; echo "      httpsRedirect: true"; fi)
+HTTP_SERVER_EOF
+fi)
+
+  # =============================================================================
+  # SERVIDOR GRPC - CONFIGURAÇÃO COMPLETA (CONDICIONAL)
+  # =============================================================================
+$(if [ "${GRPC_SERVER_ENABLED:-false}" = "true" ]; then
+cat << 'GRPC_SERVER_EOF'
+  - port:
+      number: ${GRPC_PORT:-443}
+      name: grpc-${GATEWAY_NAME}
+      protocol: GRPC
+    hosts:
+    - "${GRPC_SERVICE_HOST:-${SERVICE_HOST}}"
+    tls:
+      mode: ${GRPC_TLS_MODE:-SIMPLE}
+$(if [ -n "${GRPC_TLS_CREDENTIAL_NAME}" ]; then echo "      credentialName: ${GRPC_TLS_CREDENTIAL_NAME}"; fi)
+GRPC_SERVER_EOF
+fi)
+
+  # =============================================================================
+  # SERVIDOR TCP - CONFIGURAÇÃO COMPLETA (CONDICIONAL)
+  # =============================================================================
+$(if [ "${TCP_SERVER_ENABLED:-false}" = "true" ]; then
+cat << 'TCP_SERVER_EOF'
+  - port:
+      number: ${TCP_PORT:-9000}
+      name: tcp-${GATEWAY_NAME}
+      protocol: TCP
+    hosts:
+    - "${TCP_SERVICE_HOST:-${SERVICE_HOST}}"
+$(if [ "${TCP_TLS_ENABLED:-false}" = "true" ]; then
+echo "    tls:"
+echo "      mode: ${TCP_TLS_MODE:-PASSTHROUGH}"
+fi)
+TCP_SERVER_EOF
+fi)
+
+  # =============================================================================
+  # SERVIDOR HTTPS MUTUAL - CONFIGURAÇÃO COMPLETA (CONDICIONAL)
+  # =============================================================================
+$(if [ "${HTTPS_MUTUAL_ENABLED:-false}" = "true" ]; then
+cat << 'HTTPS_MUTUAL_EOF'
+  - port:
+      number: ${HTTPS_MUTUAL_PORT:-8443}
+      name: https-mutual-${GATEWAY_NAME}
+      protocol: HTTPS
+    hosts:
+    - "${HTTPS_MUTUAL_HOST:-secure.${SERVICE_HOST}}"
+    tls:
+      mode: MUTUAL
+      credentialName: ${HTTPS_MUTUAL_CREDENTIAL_NAME}
+      caCertificates: ${HTTPS_MUTUAL_CA_CERTIFICATES}
+$(if [ -n "${HTTPS_MUTUAL_MIN_PROTOCOL}" ]; then echo "      minProtocolVersion: ${HTTPS_MUTUAL_MIN_PROTOCOL}"; fi)
+$(if [ -n "${HTTPS_MUTUAL_MAX_PROTOCOL}" ]; then echo "      maxProtocolVersion: ${HTTPS_MUTUAL_MAX_PROTOCOL}"; fi)
+HTTPS_MUTUAL_EOF
+fi)
+
+  # =============================================================================
+  # SERVIDOR WEBSOCKET - CONFIGURAÇÃO COMPLETA (CONDICIONAL)
+  # =============================================================================
+$(if [ "${WEBSOCKET_SERVER_ENABLED:-false}" = "true" ]; then
+cat << 'WEBSOCKET_SERVER_EOF'
+  - port:
+      number: ${WEBSOCKET_PORT:-443}
+      name: websocket-${GATEWAY_NAME}
+      protocol: HTTPS
+    hosts:
+    - "${WEBSOCKET_HOST:-ws.${SERVICE_HOST}}"
+    tls:
+      mode: ${WEBSOCKET_TLS_MODE:-SIMPLE}
+$(if [ -n "${WEBSOCKET_CREDENTIAL_NAME}" ]; then echo "      credentialName: ${WEBSOCKET_CREDENTIAL_NAME}"; fi)
+WEBSOCKET_SERVER_EOF
+fi)
+
+  # =============================================================================
+  # SERVIDORES ADICIONAIS PERSONALIZADOS (CONDICIONAL)
+  # =============================================================================
+$(if [ -n "${CUSTOM_SERVERS}" ]; then
+echo "  # Servidores personalizados"
+echo "${CUSTOM_SERVERS}"
+fi)

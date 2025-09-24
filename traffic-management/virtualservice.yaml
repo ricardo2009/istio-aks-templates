@@ -1,0 +1,231 @@
+# =============================================================================
+# VirtualService Template - Fully Parametrized for AKS Istio Add-on
+# =============================================================================
+# Template completamente genérico para roteamento de tráfego Istio
+# Suporta múltiplas estratégias de roteamento (blue/green, canary, A/B testing)
+# Todos os valores são configurados via values.yaml e processados pelo apply.sh
+# Template usa substituição de variáveis (envsubst/yq) ao invés de hardcoding
+
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: ${APP_NAME}-virtualservice
+  namespace: ${NAMESPACE}
+  labels:
+    app: ${APP_NAME}
+    version: ${VERSION}
+    environment: ${ENVIRONMENT}
+    managed-by: ${MANAGED_BY:-istio-templates}
+    feature: traffic-management
+    component: virtualservice
+  annotations:
+    istio-templates.io/category: "traffic-management"
+    istio-templates.io/component: "virtualservice"
+    istio-templates.io/description: "VirtualService for ${APP_NAME} in ${ENVIRONMENT}"
+spec:
+  # Hosts - completamente configurável via values.yaml
+  hosts:
+  - "${SERVICE_HOST}"
+  - "${SERVICE_HOST_ADDITIONAL}"
+  
+  # Gateways - referencia o Gateway criado
+  gateways:
+  - "${GATEWAY_REFERENCE}"
+  - mesh # Para tráfego interno sempre incluído
+  
+  http:
+  # =============================================================================
+  # ROTA PRINCIPAL - Configurável para múltiplas estratégias de deployment
+  # =============================================================================
+  - match:
+    - uri:
+        prefix: "${URI_PREFIX:-/}"
+    # Headers matching condicional (para A/B testing ou roteamento avançado)
+    headers:
+      ${MATCH_HEADERS}
+    
+    # Configuração de roteamento - suporta múltiplas versões/subsets
+    route:
+    # Versão principal/stable
+    - destination:
+        host: "${SERVICE_NAME}"
+        port:
+          number: ${SERVICE_PORT}
+        subset: "${SUBSET_PRIMARY:-stable}"
+      weight: ${WEIGHT_PRIMARY:-100}
+      headers:
+        request:
+          set:
+            x-routing-version: "${SUBSET_PRIMARY:-stable}"
+            x-environment: "${ENVIRONMENT}"
+            x-deployment-strategy: "${DEPLOYMENT_STRATEGY:-rolling}"
+        response:
+          set:
+            x-served-by: "${APP_NAME}-${SUBSET_PRIMARY:-stable}"
+    
+    # Versão canary/beta (condicional - apenas se weight > 0)
+    - destination:
+        host: "${SERVICE_NAME}"
+        port:
+          number: ${SERVICE_PORT}
+        subset: "${SUBSET_CANARY:-canary}"
+      weight: ${WEIGHT_CANARY:-0}
+      headers:
+        request:
+          set:
+            x-routing-version: "${SUBSET_CANARY:-canary}"
+            x-canary-deployment: "true"
+        response:
+          set:
+            x-served-by: "${APP_NAME}-${SUBSET_CANARY:-canary}"
+    
+    # Políticas de resiliência - completamente configurável
+    retries:
+      attempts: ${RETRY_ATTEMPTS:-3}
+      perTryTimeout: "${RETRY_TIMEOUT:-10s}"
+      retryOn: "${RETRY_ON:-5xx,gateway-error,connect-failure,refused-stream}"
+      retryRemoteLocalities: ${RETRY_REMOTE_LOCALITIES:-false}
+    
+    timeout: "${REQUEST_TIMEOUT:-30s}"
+    
+    # Fault injection para chaos engineering (condicional)
+    fault:
+      delay:
+        percentage:
+          value: ${FAULT_DELAY_PERCENTAGE:-0}
+        fixedDelay: "${FAULT_DELAY_DURATION:-5s}"
+      abort:
+        percentage:
+          value: ${FAULT_ABORT_PERCENTAGE:-0}
+        httpStatus: ${FAULT_ABORT_STATUS:-500}
+    
+    # Traffic mirroring para testes (condicional)
+    mirror:
+      host: "${MIRROR_SERVICE_NAME}"
+      port:
+        number: ${MIRROR_SERVICE_PORT:-8080}
+      subset: "${MIRROR_SUBSET:-mirror}"
+    mirrorPercentage:
+      value: ${MIRROR_PERCENTAGE:-0}
+    
+    # Headers manipulation - configurável por ambiente/aplicação
+    headers:
+      request:
+        set:
+          x-forwarded-proto: "https"
+          x-original-host: "${SERVICE_HOST}"
+          x-request-id: "${REQUEST_ID_HEADER}"
+        add:
+          ${REQUEST_HEADERS_ADD}
+        remove:
+        - server
+        - x-powered-by
+        ${REQUEST_HEADERS_REMOVE}
+      response:
+        set:
+          x-content-type-options: "nosniff"
+          x-frame-options: "DENY"
+          x-xss-protection: "1; mode=block"
+          ${RESPONSE_HEADERS_SET}
+        add:
+          ${RESPONSE_HEADERS_ADD}
+        remove:
+        - x-envoy-upstream-service-time
+        ${RESPONSE_HEADERS_REMOVE}
+
+  # =============================================================================
+  # ROTA PARA API ENDPOINTS - Configuração específica para APIs
+  # =============================================================================
+  - match:
+    - uri:
+        prefix: "${API_PREFIX:-/api/}"
+    
+    route:
+    - destination:
+        host: "${API_SERVICE_NAME:-${SERVICE_NAME}}"
+        port:
+          number: ${API_SERVICE_PORT:-${SERVICE_PORT}}
+        subset: "${API_SUBSET:-${SUBSET_PRIMARY:-stable}}"
+      weight: ${API_WEIGHT_PRIMARY:-100}
+    
+    - destination:
+        host: "${API_SERVICE_NAME:-${SERVICE_NAME}}"
+        port:
+          number: ${API_SERVICE_PORT:-${SERVICE_PORT}}
+        subset: "${API_SUBSET_CANARY:-${SUBSET_CANARY:-canary}}"
+      weight: ${API_WEIGHT_CANARY:-0}
+    
+    # Configurações específicas para API
+    timeout: "${API_TIMEOUT:-60s}"
+    retries:
+      attempts: ${API_RETRY_ATTEMPTS:-5}
+      perTryTimeout: "${API_RETRY_TIMEOUT:-15s}"
+      retryOn: "${API_RETRY_ON:-5xx,reset,connect-failure,refused-stream}"
+    
+    headers:
+      request:
+        set:
+          x-api-version: "${API_VERSION}"
+          x-rate-limit-app: "${APP_NAME}"
+        add:
+          content-type: "application/json"
+      response:
+        set:
+          cache-control: "${API_CACHE_CONTROL:-no-cache}"
+          x-api-response-time: "%START_TIME%"
+
+  # =============================================================================
+  # ROTA PARA HEALTH CHECKS - Sempre permitido com configuração mínima
+  # =============================================================================
+  - match:
+    - uri:
+        exact: "/health"
+    - uri:
+        exact: "/ready"
+    - uri:
+        exact: "/healthz"
+    - uri:
+        exact: "/readiness"
+    
+    route:
+    - destination:
+        host: "${HEALTH_SERVICE_NAME:-${SERVICE_NAME}}"
+        port:
+          number: ${HEALTH_SERVICE_PORT:-${SERVICE_PORT}}
+    
+    # Health checks precisam ser rápidos e sem retry desnecessário
+    timeout: "${HEALTH_TIMEOUT:-5s}"
+    retries:
+      attempts: ${HEALTH_RETRY_ATTEMPTS:-1}
+      perTryTimeout: "${HEALTH_RETRY_TIMEOUT:-2s}"
+    
+    headers:
+      request:
+        set:
+          x-health-check: "true"
+      response:
+        remove:
+        - set-cookie # Remove cookies dos health checks
+
+  # =============================================================================
+  # ROTA PARA STATIC CONTENT - Configuração para assets estáticos
+  # =============================================================================
+  - match:
+    - uri:
+        prefix: "${STATIC_PREFIX:-/static/}"
+    - uri:
+        prefix: "${ASSETS_PREFIX:-/assets/}"
+    
+    route:
+    - destination:
+        host: "${STATIC_SERVICE_NAME:-${SERVICE_NAME}}"
+        port:
+          number: ${STATIC_SERVICE_PORT:-${SERVICE_PORT}}
+    
+    # Static content com cache longo
+    timeout: "${STATIC_TIMEOUT:-10s}"
+    headers:
+      response:
+        set:
+          cache-control: "${STATIC_CACHE_CONTROL:-public, max-age=31536000}"
+          expires: "${STATIC_EXPIRES}"

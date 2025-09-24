@@ -1,0 +1,336 @@
+# =============================================================================
+# Configuração Central - Templates Istio para AKS
+# =============================================================================
+# Este arquivo controla todas as features do Istio que podem ser habilitadas
+# ou desabilitadas conforme a necessidade do ambiente e aplicação.
+
+# Configurações Globais
+global:
+  # Namespace onde os recursos do Istio serão criados
+  namespace: "istio-system"
+  # Labels globais aplicados a todos os recursos
+  labels:
+    version: "v1.0.0"
+    managed-by: "istio-templates"
+  # Ambiente atual (dev, staging, prod)
+  environment: "dev"
+  # Cluster AKS
+  cluster:
+    name: "my-aks-cluster"
+    region: "East US 2"
+
+# =============================================================================
+# GERENCIAMENTO DE TRÁFEGO
+# =============================================================================
+trafficManagement:
+  enabled: true
+  
+  # Gateway - Ponto de entrada do tráfego
+  gateway:
+    enabled: true
+    name: "main-gateway"
+    hosts:
+      - "*.example.com"
+    # Configurações por ambiente
+    environments:
+      dev:
+        hosts:
+          - "*.dev.example.com"
+      staging:
+        hosts:
+          - "*.staging.example.com" 
+      prod:
+        hosts:
+          - "*.example.com"
+          - "api.example.com"
+  
+  # Virtual Service - Roteamento de tráfego
+  virtualService:
+    enabled: true
+    # Roteamento baseado em peso para canary deployments
+    canaryRouting:
+      enabled: false
+      stableWeight: 90
+      canaryWeight: 10
+    # Roteamento baseado em headers
+    headerRouting:
+      enabled: false
+      headers:
+        - name: "user-type"
+          value: "beta"
+    # Timeouts e retries
+    timeout: "30s"
+    retries:
+      attempts: 3
+      perTryTimeout: "10s"
+  
+  # Destination Rule - Políticas de tráfego para serviços
+  destinationRule:
+    enabled: true
+    # Load balancing
+    loadBalancer:
+      simple: "ROUND_ROBIN" # ROUND_ROBIN, LEAST_CONN, RANDOM, PASSTHROUGH
+    # Circuit breaker
+    circuitBreaker:
+      enabled: true
+      consecutiveErrors: 5
+      interval: "30s"
+      baseEjectionTime: "30s"
+    # Connection pool
+    connectionPool:
+      tcp:
+        maxConnections: 100
+      http:
+        http1MaxPendingRequests: 10
+        maxRequestsPerConnection: 2
+
+# =============================================================================
+# SEGURANÇA
+# =============================================================================
+security:
+  enabled: true
+  
+  # Peer Authentication - Autenticação mTLS
+  peerAuthentication:
+    enabled: true
+    # Modo mTLS: STRICT, PERMISSIVE, DISABLE
+    mtlsMode: "STRICT"
+    # Aplicar em namespace específico ou workload
+    scope: "namespace" # namespace, workload
+    
+  # Authorization Policy - Controle de acesso
+  authorizationPolicy:
+    enabled: true
+    # Política padrão (deny-all ou allow-all)
+    defaultAction: "DENY"
+    # Regras específicas
+    rules:
+      - name: "allow-frontend"
+        source:
+          principals: ["cluster.local/ns/frontend/sa/frontend-sa"]
+        action: "ALLOW"
+      - name: "allow-get-requests"
+        operation:
+          methods: ["GET"]
+        action: "ALLOW"
+  
+  # Request Authentication - JWT e OIDC
+  requestAuthentication:
+    enabled: false
+    # Configuração JWT
+    jwt:
+      issuer: "https://example.auth0.com/"
+      audiences: ["api.example.com"]
+      jwksUri: "https://example.auth0.com/.well-known/jwks.json"
+
+# =============================================================================
+# OBSERVABILIDADE
+# =============================================================================
+observability:
+  enabled: true
+  
+  # Telemetry v2 - Métricas e traces
+  telemetry:
+    enabled: true
+    # Métricas Prometheus
+    metrics:
+      enabled: true
+      # Métricas customizadas
+      custom:
+        - name: "requests_by_version"
+          dimensions:
+            source_version: "source.labels['version'] | 'unknown'"
+            destination_version: "destination.labels['version'] | 'unknown'"
+    # Tracing distribuído
+    tracing:
+      enabled: true
+      # Porcentagem de sampling
+      sampling: 1.0
+      # Provider: jaeger, zipkin, datadog, etc.
+      provider: "jaeger"
+    # Logs de acesso
+    accessLogs:
+      enabled: true
+      format: |
+        {
+          "timestamp": "%START_TIME%",
+          "method": "%REQ(:METHOD)%",
+          "path": "%REQ(X-ENVOY-ORIGINAL-PATH?:PATH)%",
+          "status": %RESPONSE_CODE%,
+          "duration": %DURATION%,
+          "source": "%DOWNSTREAM_REMOTE_ADDRESS%",
+          "user_agent": "%REQ(USER-AGENT)%"
+        }
+  
+  # Service Monitor - Para Prometheus Operator
+  serviceMonitor:
+    enabled: true
+    interval: "30s"
+    scrapeTimeout: "10s"
+
+# =============================================================================
+# RESILIÊNCIA
+# =============================================================================
+resilience:
+  enabled: true
+  
+  # Fault Injection - Teste de falhas
+  faultInjection:
+    enabled: false
+    # Injeção de delay
+    delay:
+      enabled: false
+      percentage: 10
+      fixedDelay: "5s"
+    # Injeção de abort
+    abort:
+      enabled: false
+      percentage: 5
+      httpStatus: 500
+  
+  # Retry Policy - Política de retry
+  retryPolicy:
+    enabled: true
+    attempts: 3
+    perTryTimeout: "10s"
+    retryOn: "5xx,reset,connect-failure,refused-stream"
+  
+  # Timeout - Configurações de timeout
+  timeout:
+    enabled: true
+    request: "30s"
+    idle: "300s"
+
+# =============================================================================
+# POLÍTICAS E GOVERNANÇA
+# =============================================================================
+policiesGovernance:
+  enabled: true
+  
+  # Network Policy - Políticas de rede
+  networkPolicy:
+    enabled: true
+    # Política padrão de ingress
+    defaultIngress: "DENY"
+    # Política padrão de egress
+    defaultEgress: "ALLOW"
+    # Regras customizadas
+    customRules:
+      - name: "allow-frontend-to-backend"
+        from: "frontend"
+        to: "backend"
+        ports: [8080, 8443]
+  
+  # Security Policy - Políticas de segurança
+  securityPolicy:
+    enabled: true
+    # Scan de vulnerabilidades
+    vulnerabilityScanning: true
+    # Política de imagens
+    imagePolicy:
+      allowedRegistries:
+        - "mcr.microsoft.com"
+        - "your-acr.azurecr.io"
+      requiredAnnotations:
+        - "security.scan.passed"
+
+# =============================================================================
+# EXTENSIBILIDADE
+# =============================================================================
+extensibility:
+  enabled: false
+  
+  # WebAssembly Filters
+  wasmFilters:
+    enabled: false
+    filters:
+      - name: "custom-auth-filter"
+        image: "your-registry.com/wasm-filters:auth-v1.0.0"
+        configuration:
+          auth_header: "Authorization"
+          
+  # EnvoyFilter - Filtros customizados do Envoy
+  envoyFilter:
+    enabled: false
+    filters:
+      - name: "rate-limit-filter"
+        workloadSelector:
+          labels:
+            app: "api-gateway"
+        configPatches:
+          - applyTo: "HTTP_FILTER"
+            match:
+              context: "SIDECAR_INBOUND"
+            patch:
+              operation: "INSERT_BEFORE"
+
+# =============================================================================
+# FEATURES ADICIONAIS
+# =============================================================================
+additionalFeatures:
+  enabled: false
+  
+  # Multi-cluster configuration
+  multiCluster:
+    enabled: false
+    clusters:
+      - name: "cluster-1"
+        endpoint: "cluster-1.example.com"
+      - name: "cluster-2"
+        endpoint: "cluster-2.example.com"
+  
+  # External Services
+  externalServices:
+    enabled: false
+    services:
+      - name: "external-api"
+        hosts: ["api.external.com"]
+        ports:
+          - number: 443
+            name: "https"
+            protocol: "HTTPS"
+
+# =============================================================================
+# CONFIGURAÇÕES POR AMBIENTE
+# =============================================================================
+environments:
+  dev:
+    # Configurações específicas para desenvolvimento
+    security:
+      peerAuthentication:
+        mtlsMode: "PERMISSIVE"
+    observability:
+      telemetry:
+        tracing:
+          sampling: 0.1 # Menos sampling em dev
+    resilience:
+      faultInjection:
+        enabled: true # Testes de caos em dev
+  
+  staging:
+    # Configurações específicas para staging
+    security:
+      peerAuthentication:
+        mtlsMode: "STRICT"
+    observability:
+      telemetry:
+        tracing:
+          sampling: 0.5
+    resilience:
+      faultInjection:
+        enabled: true
+  
+  prod:
+    # Configurações específicas para produção
+    security:
+      peerAuthentication:
+        mtlsMode: "STRICT"
+      authorizationPolicy:
+        defaultAction: "DENY"
+    observability:
+      telemetry:
+        tracing:
+          sampling: 0.01 # Menos sampling em prod
+    resilience:
+      faultInjection:
+        enabled: false # Sem injeção de falhas em prod
