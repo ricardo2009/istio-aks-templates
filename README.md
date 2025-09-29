@@ -1,492 +1,574 @@
-# 🚀 Istio Templates para AKS - Sistema Completamente Parametrizável
+# 🚀 Istio Templates para AKS# Istio Templates para AKS com Jinja2yq --version
 
-Este repositório contém templates Istio completamente parametrizáveis, projetados para máxima reutilização em múltiplas aplicações e esteiras de CI/CD no Azure Kubernetes Service (AKS) com Istio Add-on.
 
-## 📋 Índice
 
-- [Visão Geral](#visão-geral)
-- [Pré-requisitos](#pré-requisitos)
-- [Estrutura do Projeto](#estrutura-do-projeto)
-- [Como Usar](#como-usar)
-- [Configuração](#configuração)
-- [Overlays de Ambiente](#overlays-de-ambiente)
-- [Scripts de Deployment](#scripts-de-deployment)
-- [Exemplos Práticos](#exemplos-práticos)
-- [Troubleshooting](#troubleshooting)
-- [Contribuição](#contribuição)
+> **Estratégia Helm sem Helm** - Templates familiares com `{{ .Values.xxx }}` processados por renderizador Python customizado.envsubst --version
 
-## 🌟 Visão Geral
 
-### Por que Templates Parametrizáveis?
 
-- **Reutilização Máxima**: Um conjunto de templates serve múltiplas aplicações
-- **Padronização**: Configurações consistentes entre ambientes
-- **Flexibilidade**: Adaptação fácil para diferentes cenários
-- **CI/CD Friendly**: Integração simples em pipelines automatizados
-- **AKS Optimized**: Configurado especificamente para AKS Istio Add-on
+[![Deploy](https://github.com/ricardo2009/istio-aks-templates/actions/workflows/deploy.yml/badge.svg)](https://github.com/ricardo2009/istio-aks-templates/actions/workflows/deploy.yml)Este repositório fornece um conjunto de templates Istio modulares renderizados com Jinja2. O objetivo é substituir o uso de Helm/envsubst por uma abordagem 100% declarativa, reutilizável e fácil de automatizar em pipelines CI/CD no Azure Kubernetes Service (AKS) com o add-on Istio.az --version
 
-### Características Principais
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-✅ **100% Parametrizável**: Nenhum valor hardcoded nos templates  
-✅ **Multi-ambiente**: Overlays específicos para dev/staging/prod  
-✅ **AKS Native**: Usa namespaces e seletores específicos do AKS Istio  
-✅ **Expert-level**: Configurações avançadas de tráfego, segurança e observabilidade  
-✅ **CI/CD Ready**: Scripts automatizados para deployment  
-
-## � Estrutura do Repositório
-
-```
-/
-├── README.md                       # 📖 Documentação principal
-├── values.yaml                     # ⚙️ Configuração base
-├── schema.yaml                     # 📋 Schema de validação
-├── .env.example                    # 📝 Template de configuração
-├── .github/workflows/              # 🔄 GitHub Actions workflows
-├── scripts/preprocess-templates.sh # 🛠️ Script de processamento
-├── templates/                      # 📦 Templates Istio organizados
-│   ├── traffic-management/         # 🔀 Gateway, VirtualService, etc.
-│   ├── security/                   # 🔒 mTLS, Authorization, etc.
-│   ├── observability/              # 📊 Telemetry, Monitoring
-│   ├── resilience/                 # 🛡️ Circuit breaker, Retry
-│   └── ...
-├── overlays/                       # 🌍 Configurações por ambiente
-│   ├── dev/values.yaml            # 🧪 Desenvolvimento
-│   ├── staging/values.yaml        # 🚧 Staging
-│   └── prod/values.yaml           # 🚀 Produção
-├── docs/                          # 📚 Documentação adicional
-└── examples/                      # 💡 Exemplos de uso
-```
-
-## �🔧 Pré-requisitos
-
-### Ferramentas Necessárias
-
-```bash
-# Kubernetes CLI
-kubectl version --client
-
-# YAML processor
-yq --version
-
-# Environment substitution
-envsubst --version
-
-# Azure CLI (opcional, para gerenciar AKS)
-az --version
-```
-
-### Cluster AKS com Istio
-
-```bash
-# Habilitar Istio Add-on no AKS
-az aks mesh enable --resource-group <resource-group> --name <cluster-name>
-
-# Verificar se Istio está instalado
-kubectl get namespace aks-istio-system
-kubectl get pods -n aks-istio-system
-```
-
-## 📁 Estrutura do Projeto
-
-```
 istio-templates/
-├── 📁 traffic-management/          # Templates de gerenciamento de tráfego
-│   ├── gateway.yaml               # Gateway parametrizável
-│   ├── virtualservice.yaml        # VirtualService completo
-│   └── destinationrule.yaml       # DestinationRule com circuit breakers
-├── 📁 security/                   # Templates de segurança
-│   ├── peer-authentication.yaml   # mTLS configuration
-│   └── authorization-policy.yaml  # Políticas de autorização
-├── 📁 observability/              # Templates de observabilidade
-│   ├── telemetry.yaml            # Métricas e traces
-│   └── access-logging.yaml       # Logs de acesso
-├── 📁 resilience/                 # Templates de resilência
-│   ├── service-entry.yaml        # Serviços externos
-│   └── workload-entry.yaml       # Workloads externos
-├── 📁 policies-governance/        # Políticas e governança
-│   ├── request-authentication.yaml # Autenticação JWT
-│   └── envoy-filter.yaml         # Filtros customizados
-├── 📁 extensibility/              # Extensões avançadas
-│   ├── wasm-plugin.yaml          # Plugins WASM
-│   └── telemetry-v2.yaml         # Telemetria v2
-├── 📁 additional-features/        # Recursos adicionais
-│   ├── rate-limiting.yaml        # Rate limiting
-│   └── circuit-breaker.yaml      # Circuit breakers
-├── 📁 overlays/                   # Configurações por ambiente
-│   ├── dev/values.yaml           # Desenvolvimento
-│   ├── staging/values.yaml       # Homologação
-│   └── prod/values.yaml          # Produção
-├── values.yaml                   # Configuração principal
-├── schema.yaml                   # Schema de validação
-├── apply.sh                      # Script básico de aplicação
-├── deploy-parametrized.sh        # Script avançado parametrizado
-└── README.md                     # Esta documentação
-```
 
-## 🚀 Como Usar
+## 🎯 **Visão Geral**
 
-### Método 1: Script Automatizado (Recomendado)
+## Visão geralenvsubst < traffic-management/gateway.yaml > processed-gateway.yaml
 
-```bash
-# Dar permissão de execução
-chmod +x deploy-parametrized.sh
+Este repositório fornece templates Istio **modulares** e **reutilizáveis** para Azure Kubernetes Service (AKS), utilizando sintaxe familiar do Helm sem a dependência do Helm.
 
-# Deploy para desenvolvimento
-./deploy-parametrized.sh dev myapi myapi-dev
-
-# Deploy para staging
-./deploy-parametrized.sh staging frontend frontend-staging
-
-# Deploy para produção  
-./deploy-parametrized.sh prod backend backend-prod
-```
-
-### Método 2: Manual com envsubst
-
-```bash
-# 1. Definir variáveis de ambiente
-export APP_NAME="myapi"
-export ENVIRONMENT="prod"
-export NAMESPACE="myapi-prod"
-export SERVICE_HOST="api.company.com"
-# ... outras variáveis
-
-# 2. Processar templates
-envsubst < traffic-management/gateway.yaml > processed-gateway.yaml
 envsubst < traffic-management/virtualservice.yaml > processed-virtualservice.yaml
 
-# 3. Aplicar no cluster
-kubectl apply -f processed-gateway.yaml -n $NAMESPACE
-kubectl apply -f processed-virtualservice.yaml -n $NAMESPACE
+### ✨ **Características**
+
+- **Modularidade**: templates organizados por domínios (`traffic`, `security`, `workloads`).env | grep -E "(APP_NAME|SERVICE_HOST|NAMESPACE)"
+
+- 🎨 **Sintaxe Helm**: `{{ .Values.app.name }}`, condicionais, loops
+
+- 🔄 **Zero Dependência**: Sem Helm, apenas Python + Jinja2- **Reuso**: macros compartilhadas para metadados, rótulos e métricas.envsubst < template.yaml
+
+- 🌍 **Multi-ambiente**: Dev, Staging, Production
+
+- 🤖 **CI/CD Ready**: GitHub Actions otimizado- **Configuração declarativa**: valores versionados em `config/values` e overlays por ambiente em `config/environments`.yq e '.' processed-manifest.yaml
+
+- 🔒 **Seguro**: mTLS, PeerAuthentication, políticas de segurança
+
+- 📊 **Observável**: Labels e anotações padronizadas- **Renderização determinística**: script Python que combina valores + templates e gera manifests prontos para aplicar com `kubectl`.# peer-authentication.yaml
+
+
+
+## 🚀 **Quick Start**apiVersion: security.istio.io/v1beta1
+
+
+
+### **1. Instalação**## Estrutura de diretórioskind: PeerAuthentication
+
+
+
+```bashmetadata:
+
+git clone https://github.com/ricardo2009/istio-aks-templates.git
+
+cd istio-aks-templates```  name: ${PA_NAME}
+
+pip install -r requirements.txt
+
+```.  namespace: ${NAMESPACE}
+
+
+
+### **2. Renderizar Templates**├── config/spec:
+
+
+
+```bash│   ├── environments/         # Overrides por ambiente (dev, staging, prod)  mtls:
+
+# Ambiente staging
+
+python scripts/helm_render.py -t templates -v templates/values-staging.yaml -o manifests/staging│   └── values/               # Configuração base modular    mode: ${MTLS_MODE}  # STRICT para prod, PERMISSIVE para dev
+
+
+
+# Ambiente production├── docs/                     # Documentação complementar```
+
+python scripts/helm_render.py -t templates -v templates/values-production.yaml -o manifests/production
+
+```├── scripts/
+
+
+
+### **3. Deploy no AKS**│   └── render.py             # Renderizador oficial (Jinja2)### Políticas de Autorização
+
+
+
+```bash├── templates/
+
+kubectl apply -f manifests/staging/
+
+```│   ├── _shared/              # Macros utilitárias```yaml
+
+
+
+## 📁 **Estrutura do Projeto**│   └── modules/# authorization-policy.yaml
+
+
+
+```│       ├── security/         # PeerAuthentication, AuthorizationPolicy, ...apiVersion: security.istio.io/v1beta1
+
+istio-aks-templates/
+
+├── .github/workflows/           # CI/CD GitHub Actions│       ├── traffic/          # Gateway, VirtualService, DestinationRulekind: AuthorizationPolicy
+
+│   └── deploy.yml              # Workflow principal
+
+├── templates/                   # Templates Helm-style│       └── workloads/        # HorizontalPodAutoscaler (HPA)metadata:
+
+│   ├── values.yaml             # Valores padrão
+
+│   ├── values-staging.yaml     # Configuração staging└── requirements.txt          # Dependências Python necessárias  name: ${AUTH_POLICY_NAME}
+
+│   ├── values-production.yaml  # Configuração production
+
+│   ├── gateway.yaml            # Template Gateway```spec:
+
+│   ├── virtualservice.yaml     # Template VirtualService
+
+│   ├── destinationrule.yaml    # Template DestinationRule  action: ${AUTH_ACTION}  # ALLOW/DENY
+
+│   └── peerauthentication.yaml # Template PeerAuthentication
+
+├── manifests/                   # Output renderizado (gitignored)## Pré-requisitos  rules:
+
+│   ├── staging/                # Manifests staging
+
+│   └── production/             # Manifests production  - from:
+
+├── scripts/
+
+│   └── helm_render.py          # Renderizador principal- Python 3.9+    - source:
+
+├── docs/                       # Documentação
+
+│   ├── USAGE.md               # Guia de uso- Pip (para instalar as dependências)        principals: ["cluster.local/ns/${NAMESPACE}/sa/${SERVICE_ACCOUNT}"]
+
+│   └── CICD.md                # Configuração CI/CD
+
+└── README.md                   # Este arquivo- Kubectl configurado para o cluster AKS (deploy manual ou via pipeline)```
+
 ```
 
-### Método 3: Integração CI/CD
+- Azure CLI (opcional, apenas se for provisionar/gerenciar o cluster)
 
-```yaml
-# Azure DevOps Pipeline Example
-steps:
-- task: Bash@3
-  displayName: 'Deploy Istio Templates'
-  inputs:
-    targetType: 'inline'
-    script: |
-      # Baixar templates do repositório
-      git clone https://github.com/company/istio-templates.git
-      cd istio-templates
-      
-      # Executar deploy parametrizado
-      ./deploy-parametrized.sh $(environment) $(appName) $(namespace)
-  env:
-    KUBECONFIG: $(kubeconfig)
-```
-
-## ⚙️ Configuração
-
-### Arquivo values.yaml Principal
-
-O arquivo `values.yaml` contém todas as configurações default:
-
-```yaml
-global:
-  app: "myapp"
-  version: "1.0.0"
-  environment: "dev"
-
-trafficManagement:
-  gateway:
-    enabled: true
-    instances:
-      main-gateway:
-        hosts:
-          - "app.example.com"
-        tls:
-          mode: "SIMPLE"
-```
-
-### Variáveis de Template
-
-Os templates usam sintaxe `${VARIABLE_NAME}` para substituição:
-
-```yaml
-# gateway.yaml
-apiVersion: networking.istio.io/v1beta1
-kind: Gateway
-metadata:
-  name: ${GATEWAY_NAME}
-  namespace: ${NAMESPACE}
-spec:
-  selector:
-    istio: ${GATEWAY_SELECTOR}  # aks-istio-ingressgateway-external
-  servers:
-  - port:
-      number: 443
-      name: https
-      protocol: HTTPS
-    hosts:
-    - "${SERVICE_HOST}"
-```
-
-### Variáveis Principais Suportadas
-
-| Categoria | Variável | Descrição | Exemplo |
-|-----------|----------|-----------|---------|
-| **Global** | `APP_NAME` | Nome da aplicação | `myapi` |
-| | `VERSION` | Versão da aplicação | `1.0.0` |
-| | `ENVIRONMENT` | Ambiente | `prod` |
-| | `NAMESPACE` | Namespace K8s | `myapi-prod` |
-| **Gateway** | `GATEWAY_SELECTOR` | Seletor do gateway | `aks-istio-ingressgateway-external` |
-| | `SERVICE_HOST` | Host do serviço | `api.company.com` |
-| **VirtualService** | `SERVICE_NAME` | Nome do serviço | `frontend-service` |
-| | `SERVICE_PORT` | Porta do serviço | `8080` |
-| | `WEIGHT_PRIMARY` | Peso do tráfego principal | `90` |
-| | `WEIGHT_CANARY` | Peso do canary | `10` |
-
-## 🌍 Overlays de Ambiente
-
-### Desenvolvimento (dev)
-
-```yaml
-# overlays/dev/values.yaml
-global:
-  environment: "dev"
-  debug: true
-
-trafficManagement:
-  virtualService:
-    instances:
-      main-vs:
-        faultInjection:
-          delay:
-            percentage: 2.0  # Teste de latência
-          abort:
-            percentage: 0.5  # Teste de falhas
-```
-
-### Produção (prod)
-
-```yaml
-# overlays/prod/values.yaml
-global:
-  environment: "prod"
-  debug: false
-
-security:
-  peerAuthentication:
-    instances:
-      default-pa:
-        mtls:
-          mode: "STRICT"  # mTLS obrigatório
-
-trafficManagement:
-  virtualService:
-    instances:
-      main-vs:
-        faultInjection:
-          delay:
-            percentage: 0  # Sem fault injection
-```
-
-## 📜 Scripts de Deployment
-
-### deploy-parametrized.sh
-
-Script principal com funcionalidades completas:
-
-- ✅ Validação de pré-requisitos
-- ✅ Mesclagem de overlays de ambiente
-- ✅ Substituição de variáveis
-- ✅ Validação de manifests
-- ✅ Deploy ordenado
-- ✅ Status do deployment
-
-```bash
-# Uso completo
-./deploy-parametrized.sh [environment] [app_name] [namespace]
-
-# Exemplos
-./deploy-parametrized.sh dev myapi myapi-dev
-./deploy-parametrized.sh prod frontend frontend-prod
-```
-
-## 💡 Exemplos Práticos
-
-### Exemplo 1: API Backend
-
-```bash
-# Configurar variáveis específicas
-export APP_NAME="backend-api"
-export SERVICE_HOST="api.company.com"
-export SERVICE_NAME="backend-service" 
-export SERVICE_PORT="8080"
-
-# Deploy
-./deploy-parametrized.sh prod backend-api backend-prod
-```
-
-### Exemplo 2: Frontend com Canary
-
-```bash
-# Configurar pesos de canary
-export WEIGHT_PRIMARY="80"
-export WEIGHT_CANARY="20"
-
-# Deploy com canary deployment
-./deploy-parametrized.sh staging frontend frontend-staging
-```
-
-### Exemplo 3: Microserviço com Rate Limiting
-
-```bash
-# Configurar rate limiting
-export RATE_LIMIT_ENABLED="true"
-export RATE_LIMIT_RPS="100"
-
-# Deploy
-./deploy-parametrized.sh prod user-service users-prod
-```
-
-## 🔍 Troubleshooting
-
-### Problemas Comuns
-
-#### 1. Gateway não está funcionando
-
-```bash
-# Verificar se Istio add-on está ativo
-kubectl get pods -n aks-istio-system
-
-# Verificar seletores corretos
-kubectl get service -n aks-istio-ingress
-```
-
-#### 2. Variáveis não substituídas
-
-```bash
-# Verificar se todas as variáveis estão definidas
-env | grep -E "(APP_NAME|SERVICE_HOST|NAMESPACE)"
-
-# Testar substituição manual
-envsubst < template.yaml
-```
-
-#### 3. Validação de manifests falha
-
-```bash
-# Validar YAML syntax
-yq e '.' processed-manifest.yaml
-
-# Validar com kubectl
-kubectl --dry-run=client apply -f processed-manifest.yaml
-```
-
-### Logs e Debug
-
-```bash
-# Logs do gateway
-kubectl logs -n aks-istio-system -l app=istiod
-
-# Status dos recursos Istio
-kubectl get gateway,virtualservice,destinationrule -A
-
-# Debug do proxy sidecar
-kubectl logs <pod-name> -c istio-proxy
-```
-
-## 🔐 Configurações de Segurança AKS
-
-### mTLS Automático
-
-O AKS Istio add-on configura mTLS automaticamente:
-
-```yaml
-# peer-authentication.yaml
-apiVersion: security.istio.io/v1beta1
-kind: PeerAuthentication
-metadata:
-  name: ${PA_NAME}
-  namespace: ${NAMESPACE}
-spec:
-  mtls:
-    mode: ${MTLS_MODE}  # STRICT para prod, PERMISSIVE para dev
-```
-
-### Políticas de Autorização
-
-```yaml
-# authorization-policy.yaml
-apiVersion: security.istio.io/v1beta1
-kind: AuthorizationPolicy
-metadata:
-  name: ${AUTH_POLICY_NAME}
-spec:
-  action: ${AUTH_ACTION}  # ALLOW/DENY
-  rules:
-  - from:
-    - source:
-        principals: ["cluster.local/ns/${NAMESPACE}/sa/${SERVICE_ACCOUNT}"]
-```
+## 🔧 **Configuração por Ambiente**
 
 ## 📊 Observabilidade
 
-### Métricas Automáticas
+### **Staging** (`values-staging.yaml`)
 
-```bash
-# Verificar métricas do Prometheus
+- Namespace: `pets-staging`Instale as dependências Python:
+
+- mTLS: `PERMISSIVE` (desenvolvimento)
+
+- Routing: 90% primary, 10% canary### Métricas Automáticas
+
+- Domain: `pets-staging.contoso.com`
+
+```powershell
+
+### **Production** (`values-production.yaml`)
+
+- Namespace: `pets-prod`python -m pip install -r requirements.txt```bash
+
+- mTLS: `STRICT` (máxima segurança)
+
+- Routing: 95% primary, 5% canary```# Verificar métricas do Prometheus
+
+- Domain: `pets.contoso.com`
+
 kubectl port-forward -n aks-istio-system svc/prometheus 9090:9090
 
-# Grafana (se instalado)
-kubectl port-forward -n aks-istio-system svc/grafana 3000:3000
+## 🎨 **Exemplos de Templates**
+
+## Configuração de valores
+
+### **Gateway com TLS**
+
+```yaml# Grafana (se instalado)
+
+apiVersion: networking.istio.io/v1beta1
+
+kind: GatewayOs valores são separados em arquivos temáticos para facilitar a manutenção.kubectl port-forward -n aks-istio-system svc/grafana 3000:3000
+
+metadata:
+
+  name: {{ .Values.network.gateway.name }}```
+
+  namespace: {{ .Values.network.gateway.namespace }}
+
+spec:### `config/values/global.yaml`
+
+  selector:
+
+    istio: aks-istio-ingressgateway-external### Tracing com Jaeger
+
+  servers:
+
+  - port:Define metadados padrão usados por todos os manifests.
+
+      number: 443
+
+      name: https```bash
+
+      protocol: HTTPS
+
+    hosts:```yaml# Acessar Jaeger UI
+
+{{- range .Values.network.gateway.hosts }}
+
+    - {{ . }}global:kubectl port-forward -n aks-istio-system svc/jaeger-query 16686:16686
+
+{{- end }}
+
+    tls:  app: sample-app```
+
+      mode: SIMPLE
+
+      credentialName: {{ .Values.network.gateway.tls.secretName }}  version: "1.0.0"
+
 ```
 
-### Tracing com Jaeger
+  environment: dev## 🤝 Contribuição
 
-```bash
-# Acessar Jaeger UI
-kubectl port-forward -n aks-istio-system svc/jaeger-query 16686:16686
+### **VirtualService com Canary**
+
+```yaml  namespace: sample-app
+
+spec:
+
+  http:  labels:### Como Contribuir
+
+  - name: primary-routing
+
+    route:    managed_by: istio-blueprints
+
+    - destination:
+
+        host: {{ .Values.service.host }}    cost_center: platform-team1. Fork do repositório
+
+        subset: primary
+
+      weight: {{ .Values.network.virtualservice.routing.primary.weight }}  annotations:2. Criar branch para feature: `git checkout -b feature/nova-funcionalidade`
+
+{{- if gt .Values.network.virtualservice.routing.canary.weight 0 }}
+
+    - destination:    owner: platform-team@contoso.com3. Commit das mudanças: `git commit -am 'Adiciona nova funcionalidade'`
+
+        host: {{ .Values.service.host }}
+
+        subset: canary```4. Push para branch: `git push origin feature/nova-funcionalidade`
+
+      weight: {{ .Values.network.virtualservice.routing.canary.weight }}
+
+{{- end }}5. Abrir Pull Request
+
 ```
 
-## 🤝 Contribuição
+### `config/values/traffic.yaml`
 
-### Como Contribuir
-
-1. Fork do repositório
-2. Criar branch para feature: `git checkout -b feature/nova-funcionalidade`
-3. Commit das mudanças: `git commit -am 'Adiciona nova funcionalidade'`
-4. Push para branch: `git push origin feature/nova-funcionalidade`
-5. Abrir Pull Request
+## 🤖 **CI/CD com GitHub Actions**
 
 ### Padrões de Código
 
-- Templates devem ser 100% parametrizáveis
-- Usar variáveis com nomes descritivos
-- Documentar todas as variáveis no schema.yaml
-- Incluir exemplos nos overlays
-- Testar em múltiplos ambientes
+### **Workflow Automático**
 
-### Adicionando Novos Templates
+Configura gateways, virtual services e destination rules reutilizáveis.
 
-1. Criar template em diretório apropriado
-2. Usar sintaxe `${VARIABLE_NAME}` para parametrização
-3. Documentar variáveis em schema.yaml
-4. Adicionar configuração em values.yaml
-5. Criar testes nos overlays
-6. Atualizar deploy-parametrized.sh se necessário
+- **Pull Request**: Deploy automático no staging
 
-## 📚 Referências
+- **Merge to Main**: Deploy automático na production- Templates devem ser 100% parametrizáveis
 
-- [Istio Documentation](https://istio.io/latest/docs/)
-- [AKS Istio Add-on](https://docs.microsoft.com/en-us/azure/aks/istio-about)
-- [Kubernetes Documentation](https://kubernetes.io/docs/)
-- [Azure Kubernetes Service](https://docs.microsoft.com/en-us/azure/aks/)
+- **Validação**: Lint YAML + Validação de sintaxe
 
-## 📄 Licença
+- **Verificação**: Health check pós-deploy```yaml- Usar variáveis com nomes descritivos
 
-Este projeto está licenciado sob a MIT License - veja o arquivo [LICENSE](LICENSE) para detalhes.
+
+
+### **Configuração Necessária**traffic:- Documentar todas as variáveis no schema.yaml
+
+
+
+1. **Secrets GitHub**:  gateways:- Incluir exemplos nos overlays
+
+   - `AZURE_CREDENTIALS`
+
+   - `AKS_RESOURCE_GROUP`    - name: sample-app-gateway- Testar em múltiplos ambientes
+
+   - `AKS_CLUSTER_NAME_STAGING`
+
+   - `AKS_CLUSTER_NAME_PROD`      namespace: aks-istio-ingress
+
+
+
+2. **Environments**:      selector: aks-istio-ingressgateway-external### Adicionando Novos Templates
+
+   - `staging` (auto-deploy)
+
+   - `production` (manual approval)      servers:
+
+
+
+## 📖 **Documentação**        - port: 4431. Criar template em diretório apropriado
+
+
+
+- 📚 [**Guia de Uso**](docs/USAGE.md) - Como usar os templates          name: https2. Usar sintaxe `${VARIABLE_NAME}` para parametrização
+
+- 🔄 [**CI/CD Setup**](docs/CICD.md) - Configuração GitHub Actions
+
+          protocol: HTTPS3. Documentar variáveis em schema.yaml
+
+## 🔧 **Comandos Úteis**
+
+          hosts:4. Adicionar configuração em values.yaml
+
+### **Renderização**
+
+```bash            - sample.contoso.com5. Criar testes nos overlays
+
+# Testar renderização
+
+python scripts/helm_render.py -t templates -v templates/values.yaml -o test-output          tls:6. Atualizar deploy-parametrized.sh se necessário
+
+
+
+# Validar YAML            mode: SIMPLE
+
+yamllint templates/
+
+            credential_name: sample-app-tls## 📚 Referências
+
+# Dry-run no cluster
+
+kubectl apply --dry-run=client -f manifests/staging/  virtual_services:
+
+```
+
+    - name: sample-app- [Istio Documentation](https://istio.io/latest/docs/)
+
+### **Deployment**
+
+```bash      namespace: sample-app- [AKS Istio Add-on](https://docs.microsoft.com/en-us/azure/aks/istio-about)
+
+# Deploy staging
+
+kubectl apply -f manifests/staging/      gateways:- [Kubernetes Documentation](https://kubernetes.io/docs/)
+
+
+
+# Verificar recursos        - sample-app-gateway- [Azure Kubernetes Service](https://docs.microsoft.com/en-us/azure/aks/)
+
+kubectl get gateway,virtualservice,destinationrule,peerauthentication -n pets-staging
+
+      hosts:
+
+# Health check
+
+kubectl describe virtualservice -n pets-staging        - sample.contoso.com## 📄 Licença
+
+```
+
+      http:
+
+## 🎯 **Por que esta Abordagem?**
+
+        - name: primary-routingEste projeto está licenciado sob a MIT License - veja o arquivo [LICENSE](LICENSE) para detalhes.
+
+### ✅ **Vantagens**
+
+          match:
+
+- **Familiar**: Sintaxe Helm que desenvolvedores já conhecem
+
+- **Leve**: Zero overhead do Tiller/Helm            - uri:---
+
+- **Flexível**: Customização total do processo de renderização
+
+- **Rápido**: Renderização direta sem dependências externas                prefix: /
+
+- **Controlável**: Versionamento completo de valores e templates
+
+          route:## 🏷️ Tags
+
+### 🆚 **vs Helm Tradicional**
+
+            - destination:
+
+| Aspecto | Helm | Esta Solução |
+
+|---------|------|--------------|                host: sample-app.primary.svc.cluster.local`istio` `aks` `kubernetes` `azure` `service-mesh` `templates` `ci-cd` `devops` `microservices` `parametrizable`
+
+| Dependências | Helm CLI, Charts | Python + Jinja2 |
+
+| Sintaxe | `{{ .Values.x }}` | `{{ .Values.x }}` ✅ |                port: 80
+
+| Debugging | helm template | Renderização direta ✅ |
+
+| CI/CD | Complexo | Simples ✅ |                subset: primary**Criado com ❤️ para máxima reutilização em múltiplas aplicações e esteiras de CI/CD**
+
+| Customização | Limitada | Total ✅ |              weight: 90
+
+            - destination:
+
+## 🤝 **Contribuição**                host: sample-app.canary.svc.cluster.local
+
+                port: 80
+
+1. Fork do projeto                subset: canary
+
+2. Criar feature branch: `git checkout -b feature/nova-funcionalidade`              weight: 10
+
+3. Commit: `git commit -am 'Adiciona nova funcionalidade'````
+
+4. Push: `git push origin feature/nova-funcionalidade`
+
+5. Pull Request### `config/values/security.yaml`
+
+
+
+### **Adicionando Templates**Inclui políticas padrão de mTLS e autorização.
+
+
+
+1. Criar template em `/templates````yaml
+
+2. Usar sintaxe `{{ .Values.xxx }}`security:
+
+3. Adicionar configuração em `values*.yaml`  peer_authentications:
+
+4. Testar renderização    - name: default-mtls
+
+5. Atualizar documentação      namespace: sample-app
+
+      mtls:
+
+## 📄 **Licença**        mode: STRICT
+
+  authorization_policies:
+
+Este projeto está licenciado sob a [MIT License](LICENSE).    - name: sample-app-deny-external
+
+      namespace: sample-app
+
+## 🏷️ **Tags**      action: DENY
+
+      rules:
+
+`istio` `aks` `kubernetes` `azure` `service-mesh` `templates` `ci-cd` `devops` `jinja2` `helm-alternative`        - from:
+
+            - source:
+
+---                notPrincipals:
+
+                  - cluster.local/ns/aks-istio-ingress/sa/istio-ingressgateway
+
+**Criado com ❤️ para máxima reutilização e simplicidade em ambientes empresariais.**          to:
+            - operation:
+                hosts:
+                  - sample-app.sample-app.svc.cluster.local
+```
+
+### `config/values/workloads.yaml`
+
+Define workloads que precisam de objetos HPA.
+
+```yaml
+workloads:
+  - name: sample-app
+    namespace: sample-app
+    autoscaling:
+      enabled: true
+      target:
+        api_version: apps/v1
+        kind: Deployment
+        name: sample-app
+      min_replicas: 2
+      max_replicas: 6
+      metrics:
+        - type: Resource
+          resource:
+            name: cpu
+            target:
+              type: Utilization
+              averageUtilization: 70
+        - type: Resource
+          resource:
+            name: memory
+            target:
+              type: Utilization
+              averageUtilization: 80
+```
+
+## Overlays de ambiente
+
+Arquivos em `config/environments` podem sobrescrever qualquer chave. Eles são mesclados após os valores base.
+
+Exemplo (`config/environments/prod.yaml`):
+
+```yaml
+global:
+  environment: prod
+  namespace: sample-app-prod
+  annotations:
+    deployment-window: "24x7"
+traffic:
+  virtual_services:
+    - name: sample-app
+      namespace: sample-app-prod
+      gateways:
+        - sample-app-gateway
+      hosts:
+        - sample.contoso.com
+      http:
+        - name: weighted-canary
+          match:
+            - uri:
+                prefix: /
+          route:
+            - destination:
+                host: sample-app.primary.svc.cluster.local
+                port: 80
+                subset: primary
+              weight: 95
+            - destination:
+                host: sample-app.canary.svc.cluster.local
+                port: 80
+                subset: canary
+              weight: 5
+```
+
+## Como renderizar os manifests
+
+1. Certifique-se de estar na raiz do repositório.
+2. Instale as dependências (`pip install -r requirements.txt`).
+3. Execute o renderizador apontando para o ambiente desejado:
+
+```powershell
+python scripts/render.py --environment config/environments/prod.yaml --output-dir generated/prod
+```
+
+O script automaticamente carrega todos os arquivos YAML dentro de `config/values`. Use `-v` para fornecer arquivos adicionais ou `-m` para renderizar apenas módulos específicos:
+
+```powershell
+python scripts/render.py -m traffic -m security -e config/environments/staging.yaml -o generated/staging
+```
+
+Os manifests renderizados ficam em `generated/<ambiente>/...` com a mesma hierarquia dos templates.
+
+## Aplicação no cluster
+
+Depois de renderizar, aplique os manifests normalmente:
+
+```powershell
+kubectl apply -f generated/prod/templates/modules/traffic/gateways.yaml
+kubectl apply -f generated/prod/templates/modules/traffic/virtualservices.yaml
+kubectl apply -f generated/prod/templates/modules/workloads/hpa.yaml
+```
+
+Dica: utilize labels e anotações geradas pelos macros para rastrear deployments (`istio-templates.io/category`, `istio-templates.io/component`).
+
+## Integração com CI/CD
+
+- Adicione um passo de pipeline que executa `python scripts/render.py` e faz upload dos manifests como artefato.
+- Utilize um segundo passo (ou job) com credenciais de cluster para aplicar os manifests renderizados.
+- Para Pull Requests, execute o renderizador em modo `--strict` e valide as saídas com `kubectl apply --dry-run=client`.
+
+## Próximos passos sugeridos
+
+- Expandir `templates/modules/workloads` com recursos adicionais (por exemplo, PodDisruptionBudget).
+- Automatizar a validação YAML com `yamllint` ou `kubeval` após a renderização.
+- Atualizar os workflows do GitHub Actions para usar o renderizador em vez dos antigos scripts Helm/envsubst.
 
 ---
 
-## 🏷️ Tags
-
-`istio` `aks` `kubernetes` `azure` `service-mesh` `templates` `ci-cd` `devops` `microservices` `parametrizable`
-
-**Criado com ❤️ para máxima reutilização em múltiplas aplicações e esteiras de CI/CD**
+Mantemos o foco em simplificar a adoção de Istio no AKS com máxima governança e reutilização. Contribuições são bem-vindas!

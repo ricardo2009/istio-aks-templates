@@ -1,0 +1,29 @@
+---
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: pets-gateway-staging
+  namespace: aks-istio-ingress
+  labels:
+    app: pets
+    version: 1.0.0
+    environment: staging
+    managed-by: istio-blueprints
+    business_unit: petshop
+  annotations:
+    owner: platform-team@contoso.com
+    "istio-templates.io/category": "traffic-management"
+    "istio-templates.io/component": "gateway"
+spec:
+  selector:
+    istio: aks-istio-ingressgateway-external
+  servers:
+  - port:
+      number: 443
+      name: https
+      protocol: HTTPS
+    hosts:
+    - pets-staging.contoso.com
+    tls:
+      mode: SIMPLE
+      credentialName: pets-staging-tls

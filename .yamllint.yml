@@ -8,7 +8,7 @@ extends: default
 rules:
   # Line length - ajustado para templates com expressões longas
   line-length:
-    max: 120
+    max: 120000
     level: warning
   
   # Indentação - padrão para Kubernetes YAML

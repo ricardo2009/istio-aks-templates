@@ -1,0 +1,125 @@
+name: Deploy Istio Templates
+
+on:
+  push:
+    branches: [main]
+    paths: 
+      - 'templates/**'
+      - 'scripts/**'
+  pull_request:
+    branches: [main]
+    paths: 
+      - 'templates/**'
+      - 'scripts/**'
+
+env:
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  validate:
+    name: Validate Templates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Lint YAML files
+        run: |
+          pip install yamllint
+          yamllint templates/
+
+      - name: Validate template syntax
+        run: |
+          python scripts/helm_render.py -t templates -v templates/values.yaml -o manifests/validation
+
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: validate
+    if: github.event_name == 'pull_request'
+    environment: staging
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Render staging manifests
+        run: |
+          python scripts/helm_render.py -t templates -v templates/values-staging.yaml -o manifests/staging
+
+      - name: Setup Azure CLI
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Get AKS credentials
+        run: |
+          az aks get-credentials --resource-group ${{ secrets.AKS_RESOURCE_GROUP }} --name ${{ secrets.AKS_CLUSTER_NAME_STAGING }}
+
+      - name: Deploy to AKS Staging
+        run: |
+          kubectl apply -f manifests/staging/
+
+      - name: Verify deployment
+        run: |
+          kubectl get gateway,virtualservice,destinationrule,peerauthentication -n pets-staging
+
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: validate
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment: production
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Render production manifests
+        run: |
+          python scripts/helm_render.py -t templates -v templates/values-production.yaml -o manifests/production
+
+      - name: Setup Azure CLI
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Get AKS credentials
+        run: |
+          az aks get-credentials --resource-group ${{ secrets.AKS_RESOURCE_GROUP }} --name ${{ secrets.AKS_CLUSTER_NAME_PROD }}
+
+      - name: Deploy to AKS Production
+        run: |
+          kubectl apply -f manifests/production/
+
+      - name: Verify deployment
+        run: |
+          kubectl get gateway,virtualservice,destinationrule,peerauthentication -n pets-prod

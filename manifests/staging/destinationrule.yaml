@@ -1,0 +1,25 @@
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: pets
+  namespace: pets-staging
+  labels:
+    app: pets
+    version: 1.0.0
+    environment: staging
+    managed-by: istio-blueprints
+    business_unit: petshop
+  annotations:
+    owner: platform-team@contoso.com
+    "istio-templates.io/category": "traffic-management"
+    "istio-templates.io/component": "destinationrule"
+spec:
+  host: pets.pets-staging.svc.cluster.local
+  subsets:
+  - name: primary
+    labels:
+      version: v1
+  - name: canary
+    labels:
+      version: v2

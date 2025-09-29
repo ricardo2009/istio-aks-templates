@@ -1,0 +1,61 @@
+# Valores para ambiente de PRODUÇÃO
+# Configurações otimizadas e seguras para produção
+
+# Configurações da aplicação
+app:
+  name: pets
+  version: "1.0.0"
+  namespace: pets-prod
+
+# Metadados específicos de produção
+metadata:
+  labels:
+    managed_by: istio-blueprints
+    business_unit: petshop
+    environment: production
+  annotations:
+    owner: platform-team@contoso.com
+    deployment-strategy: canary
+    sla: "99.9%"
+    monitoring: enabled
+
+# Configurações de rede para produção
+network:
+  gateway:
+    name: pets-gateway-prod
+    namespace: aks-istio-ingress
+    hosts:
+      - pets.contoso.com
+      - www.pets.contoso.com
+    tls:
+      enabled: true
+      secretName: pets-prod-tls
+  
+  virtualservice:
+    name: pets-prod
+    gateways:
+      - pets-gateway-prod
+    routing:
+      primary:
+        weight: 95
+        subset: primary
+      canary:
+        weight: 5
+        subset: canary
+
+# Configurações de segurança (máxima segurança)
+security:
+  mtls:
+    mode: STRICT
+  peerAuthentication:
+    name: default-prod
+
+# Service discovery
+service:
+  host: pets.pets-prod.svc.cluster.local
+  port: 80
+  subsets:
+    primary:
+      version: v1
+    canary:
+      version: v2

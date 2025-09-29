@@ -1,7 +1,31 @@
-# Build outputs
+# Manifests renderizados (output)
+manifests/
+test-output/
+debug-output/
 dist/
 build/
 out/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
 # Environment files
 .env
@@ -13,6 +37,7 @@ out/
 .idea/
 *.swp
 *.swo
+*~
 
 # OS files
 .DS_Store
@@ -22,6 +47,8 @@ Thumbs.db
 tmp/
 temp/
 *.tmp
+*.temp
+*.log
 
 # Helm
 charts/*.tgz
@@ -33,7 +60,11 @@ kustomization.yaml.bak
 generated/
 rendered/
 
+# Virtual environments
+.venv/
+venv/
+env/
+
 # Cluster access credentials
 aks-labs.config
-aks-labs/
 **/aks-labs.config

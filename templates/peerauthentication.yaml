@@ -1,0 +1,19 @@
+---
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: {{ .Values.security.peerAuthentication.name }}
+  namespace: {{ .Values.app.namespace }}
+  labels:
+    app: {{ .Values.app.name }}
+    version: {{ .Values.app.version }}
+    environment: {{ .Values.metadata.labels.environment }}
+    managed-by: {{ .Values.metadata.labels.managed_by }}
+    business_unit: {{ .Values.metadata.labels.business_unit }}
+  annotations:
+    owner: {{ .Values.metadata.annotations.owner }}
+    "istio-templates.io/category": "security"
+    "istio-templates.io/component": "peer-authentication"
+spec:
+  mtls:
+    mode: {{ .Values.security.mtls.mode }}

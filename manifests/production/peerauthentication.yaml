@@ -1,0 +1,19 @@
+---
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default-prod
+  namespace: pets-prod
+  labels:
+    app: pets
+    version: 1.0.0
+    environment: production
+    managed-by: istio-blueprints
+    business_unit: petshop
+  annotations:
+    owner: platform-team@contoso.com
+    "istio-templates.io/category": "security"
+    "istio-templates.io/component": "peer-authentication"
+spec:
+  mtls:
+    mode: STRICT

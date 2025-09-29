@@ -1,0 +1,5 @@
+# Dependências para Istio Templates Renderer
+# Apenas o essencial para o helm_render.py
+
+jinja2>=3.1.0,<4.0
+pyyaml>=6.0,<7.0
