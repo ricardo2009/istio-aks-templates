@@ -354,12 +354,12 @@ jobs:
       - name: 📥 Checkout repository
         uses: actions/checkout@v4
 
-      - name: 🔐 Azure Login
+      - name: 🔐 Azure Login (OIDC)
         uses: azure/login@v1
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          client-id: '4ebe078a-fe24-448d-92af-04bd5d945739'
+          tenant-id: '16b3c013-d300-468d-ac64-7eda0820b6d3'
+          subscription-id: 'f7963a09-275a-4fc0-aa3f-805aa89eb2b7'
 
       - name: ☸️ Setup kubectl
         uses: azure/aks-set-context@v3

@@ -32,3 +32,8 @@ kustomization.yaml.bak
 # Generated manifests
 generated/
 rendered/
+
+# Cluster access credentials
+aks-labs.config
+aks-labs/
+**/aks-labs.config
