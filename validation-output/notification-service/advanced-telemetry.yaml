@@ -1,0 +1,184 @@
+apiVersion: telemetry.istio.io/v1alpha1
+kind: Telemetry
+metadata:
+  name: 'ecommerce-demo-advanced-telemetry'
+  namespace: 'ecommerce-demo'
+  labels:
+    app: '{{SERVICE_NAME | default("all-services")}}'
+  annotations:
+    istio.io/description: "Advanced telemetry configuration for ecommerce-demo"
+spec:
+  # Apply to specific workloads or all workloads in namespace
+  {{#if SERVICE_NAME}}
+  selector:
+    matchLabels:
+      app: 'notification-service'
+  {{/if}}
+  
+  # Metrics Configuration
+  metrics:
+  - providers:
+    - name: prometheus
+  - overrides:
+    - match:
+        metric: ALL_METRICS
+      tagOverrides:
+        request_protocol:
+          operation: UPSERT
+          value: '{{REQUEST_PROTOCOL | default("%{REQUEST_PROTOCOL}")}}'
+        response_code:
+          operation: UPSERT
+          value: '{{RESPONSE_CODE | default("%{RESPONSE_CODE}")}}'
+        source_app:
+          operation: UPSERT
+          value: '{{SOURCE_APP | default("%{SOURCE_APP}")}}'
+        destination_service_name:
+          operation: UPSERT
+          value: '{{DESTINATION_SERVICE | default("%{DESTINATION_SERVICE_NAME}")}}'
+        destination_service_namespace:
+          operation: UPSERT
+          value: '{{DESTINATION_NAMESPACE | default("%{DESTINATION_SERVICE_NAMESPACE}")}}'
+        custom_metric:
+          operation: UPSERT
+          value: '{{CUSTOM_METRIC_VALUE | default("default")}}'
+  
+  # Custom Metrics
+  - providers:
+    - name: prometheus
+  - overrides:
+    - match:
+        metric: requests_total
+      disabled: false
+      tagOverrides:
+        user_id:
+          operation: UPSERT
+          value: '{{USER_ID_HEADER | default("%{REQUEST_HEADERS:x-user-id}")}}'
+        tenant_id:
+          operation: UPSERT
+          value: '{{TENANT_ID_HEADER | default("%{REQUEST_HEADERS:x-tenant-id}")}}'
+        api_version:
+          operation: UPSERT
+          value: '{{API_VERSION_HEADER | default("%{REQUEST_HEADERS:x-api-version}")}}'
+        business_unit:
+          operation: UPSERT
+          value: '{{BUSINESS_UNIT | default("default")}}'
+  
+  # Request Duration Histogram
+  - providers:
+    - name: prometheus
+  - overrides:
+    - match:
+        metric: request_duration_milliseconds
+      disabled: false
+      tagOverrides:
+        method:
+          operation: UPSERT
+          value: '{{HTTP_METHOD | default("%{REQUEST_HEADERS:method}")}}'
+        endpoint:
+          operation: UPSERT
+          value: '{{ENDPOINT_PATH | default("%{REQUEST_URL_PATH}")}}'
+  
+  # Access Logging Configuration
+  accessLogging:
+  - providers:
+    - name: envoy
+  - filter:
+      expression: 'response.code >= {{LOG_RESPONSE_CODE_THRESHOLD | default(400)}}'
+  - format:
+      labels:
+        timestamp: '{{TIMESTAMP_FORMAT | default("%START_TIME%")}}'
+        method: '{{METHOD_FORMAT | default("%REQ(:METHOD)%")}}'
+        url: '{{URL_FORMAT | default("%REQ(X-ENVOY-ORIGINAL-PATH?:PATH)%")}}'
+        protocol: '{{PROTOCOL_FORMAT | default("%PROTOCOL%")}}'
+        response_code: '{{RESPONSE_CODE_FORMAT | default("%RESPONSE_CODE%")}}'
+        response_flags: '{{RESPONSE_FLAGS_FORMAT | default("%RESPONSE_FLAGS%")}}'
+        bytes_received: '{{BYTES_RECEIVED_FORMAT | default("%BYTES_RECEIVED%")}}'
+        bytes_sent: '{{BYTES_SENT_FORMAT | default("%BYTES_SENT%")}}'
+        duration: '{{DURATION_FORMAT | default("%DURATION%")}}'
+        upstream_service_time: '{{UPSTREAM_TIME_FORMAT | default("%RESP(X-ENVOY-UPSTREAM-SERVICE-TIME)%")}}'
+        x_forwarded_for: '{{X_FORWARDED_FOR_FORMAT | default("%REQ(X-FORWARDED-FOR)%")}}'
+        user_agent: '{{USER_AGENT_FORMAT | default("%REQ(USER-AGENT)%")}}'
+        request_id: '{{REQUEST_ID_FORMAT | default("%REQ(X-REQUEST-ID)%")}}'
+        authority: '{{AUTHORITY_FORMAT | default("%REQ(:AUTHORITY)%")}}'
+        upstream_host: '{{UPSTREAM_HOST_FORMAT | default("%UPSTREAM_HOST%")}}'
+        source_address: '{{SOURCE_ADDRESS_FORMAT | default("%DOWNSTREAM_REMOTE_ADDRESS_WITHOUT_PORT%")}}'
+        user_id: '{{USER_ID_LOG_FORMAT | default("%REQ(X-USER-ID)%")}}'
+        tenant_id: '{{TENANT_ID_LOG_FORMAT | default("%REQ(X-TENANT-ID)%")}}'
+        trace_id: '{{TRACE_ID_FORMAT | default("%REQ(X-TRACE-ID)%")}}'
+        span_id: '{{SPAN_ID_FORMAT | default("%REQ(X-SPAN-ID)%")}}'
+  
+  # Distributed Tracing Configuration
+  tracing:
+  - providers:
+    - name: azure-monitor
+  - randomSamplingPercentage: {{TRACING_SAMPLING_RATE | default(1.0)}}
+  - customTags:
+      service_name:
+        literal:
+          value: '{{SERVICE_NAME | default("unknown")}}'
+      service_version:
+        literal:
+          value: '{{SERVICE_VERSION | default("v1")}}'
+      environment:
+        literal:
+          value: '{{ENVIRONMENT | default("production")}}'
+      cluster_name:
+        literal:
+          value: '{{CLUSTER_NAME | default("aks-labs")}}'
+      region:
+        literal:
+          value: '{{REGION | default("westus3")}}'
+      user_id:
+        header:
+          name: x-user-id
+          defaultValue: "anonymous"
+      tenant_id:
+        header:
+          name: x-tenant-id
+          defaultValue: "default"
+      request_id:
+        header:
+          name: x-request-id
+      correlation_id:
+        header:
+          name: x-correlation-id
+---
+# Workload-specific telemetry (if needed)
+{{#if WORKLOAD_SPECIFIC_TELEMETRY}}
+apiVersion: telemetry.istio.io/v1alpha1
+kind: Telemetry
+metadata:
+  name: 'notification-service-workload-telemetry'
+  namespace: 'ecommerce-demo'
+spec:
+  selector:
+    matchLabels:
+      app: 'notification-service'
+  
+  # Service-specific metrics
+  metrics:
+  - providers:
+    - name: prometheus
+  - overrides:
+    - match:
+        metric: requests_total
+      tagOverrides:
+        {{#each CUSTOM_TAGS}}
+        '{{@key}}':
+          operation: UPSERT
+          value: '{{this}}'
+        {{/each}}
+  
+  # Service-specific access logs
+  accessLogging:
+  - providers:
+    - name: envoy
+  - format:
+      text: |
+        [%START_TIME%] "%REQ(:METHOD)% %REQ(X-ENVOY-ORIGINAL-PATH?:PATH)% %PROTOCOL%"
+        %RESPONSE_CODE% %RESPONSE_FLAGS% %BYTES_RECEIVED% %BYTES_SENT%
+        %DURATION% %RESP(X-ENVOY-UPSTREAM-SERVICE-TIME)% "%REQ(X-FORWARDED-FOR)%"
+        "%REQ(USER-AGENT)%" "%REQ(X-REQUEST-ID)%" "%REQ(:AUTHORITY)%" "%UPSTREAM_HOST%"
+        service=notification-service version={{SERVICE_VERSION}} namespace=ecommerce-demo
+        user_id="%REQ(X-USER-ID)%" tenant_id="%REQ(X-TENANT-ID)%"
+{{/if}}

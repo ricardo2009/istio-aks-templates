@@ -1,0 +1,19 @@
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: 'user-service-authz'
+  namespace: 'ecommerce-demo'
+spec:
+  selector:
+    matchLabels:
+      app: 'user-service'
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        principals: ["cluster.local/ns/ecommerce-demo/sa/api-gateway"]
+    to:
+    - operation:
+        methods: ["GET"]
+        paths: ["/"]
+

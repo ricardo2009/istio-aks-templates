@@ -1,0 +1,283 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: ecommerce-demo
+  labels:
+    app: frontend
+    version: v1
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: frontend
+      version: v1
+  template:
+    metadata:
+      labels:
+        app: frontend
+        version: v1
+    spec:
+      serviceAccountName: frontend
+      containers:
+      - name: frontend
+        image: nginx:1.25-alpine
+        ports:
+        - containerPort: 80
+          name: http
+        env:
+        - name: API_GATEWAY_URL
+          value: "http://api-gateway.ecommerce-demo.svc.cluster.local:8080"
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        volumeMounts:
+        - name: config
+          mountPath: /etc/nginx/conf.d
+        - name: html
+          mountPath: /usr/share/nginx/html
+      volumes:
+      - name: config
+        configMap:
+          name: frontend-config
+      - name: html
+        configMap:
+          name: frontend-html
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  namespace: ecommerce-demo
+  labels:
+    app: frontend
+    service: frontend
+spec:
+  ports:
+  - port: 80
+    targetPort: 80
+    name: http
+  selector:
+    app: frontend
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: frontend
+  namespace: ecommerce-demo
+  labels:
+    app: frontend
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: frontend-config
+  namespace: ecommerce-demo
+data:
+  default.conf: |
+    server {
+        listen 80;
+        server_name localhost;
+        root /usr/share/nginx/html;
+        index index.html;
+        
+        location / {
+            try_files $uri $uri/ /index.html;
+        }
+        
+        location /api/ {
+            proxy_pass http://api-gateway.ecommerce-demo.svc.cluster.local:8080/;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+        }
+        
+        location /health {
+            access_log off;
+            return 200 "healthy\n";
+            add_header Content-Type text/plain;
+        }
+    }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: frontend-html
+  namespace: ecommerce-demo
+data:
+  index.html: |
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>E-commerce Demo - Istio Service Mesh</title>
+        <style>
+            body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; }
+            .container { max-width: 1200px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+            .header { text-align: center; margin-bottom: 30px; }
+            .services { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+            .service { padding: 20px; border: 1px solid #ddd; border-radius: 8px; background: #f9f9f9; }
+            .service h3 { color: #333; margin-top: 0; }
+            .status { padding: 5px 10px; border-radius: 4px; font-weight: bold; }
+            .status.healthy { background: #d4edda; color: #155724; }
+            .status.unhealthy { background: #f8d7da; color: #721c24; }
+            .metrics { margin-top: 15px; }
+            .metric { display: flex; justify-content: space-between; margin: 5px 0; }
+            button { background: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; margin: 5px; }
+            button:hover { background: #0056b3; }
+            .chaos-controls { background: #fff3cd; padding: 15px; border-radius: 8px; margin: 20px 0; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h1>🛍️ E-commerce Platform Demo</h1>
+                <h2>Istio Service Mesh on Azure AKS</h2>
+                <p>Demonstração de resiliência, segurança e observabilidade</p>
+            </div>
+            
+            <div class="chaos-controls">
+                <h3>🔥 Chaos Engineering Controls</h3>
+                <button onclick="injectLatency()">Inject Latency</button>
+                <button onclick="injectErrors()">Inject Errors</button>
+                <button onclick="triggerCircuitBreaker()">Trigger Circuit Breaker</button>
+                <button onclick="resetChaos()">Reset All</button>
+            </div>
+            
+            <div class="services">
+                <div class="service">
+                    <h3>🖥️ Frontend Service</h3>
+                    <div class="status healthy" id="frontend-status">Healthy</div>
+                    <div class="metrics">
+                        <div class="metric"><span>Requests/min:</span> <span id="frontend-rps">1,247</span></div>
+                        <div class="metric"><span>Latency P95:</span> <span id="frontend-latency">45ms</span></div>
+                        <div class="metric"><span>Error Rate:</span> <span id="frontend-errors">0.02%</span></div>
+                    </div>
+                </div>
+                
+                <div class="service">
+                    <h3>🚪 API Gateway</h3>
+                    <div class="status healthy" id="gateway-status">Healthy</div>
+                    <div class="metrics">
+                        <div class="metric"><span>Requests/min:</span> <span id="gateway-rps">1,247</span></div>
+                        <div class="metric"><span>Latency P95:</span> <span id="gateway-latency">23ms</span></div>
+                        <div class="metric"><span>Rate Limits:</span> <span id="gateway-limits">45/hour</span></div>
+                    </div>
+                </div>
+                
+                <div class="service">
+                    <h3>👥 User Service</h3>
+                    <div class="status healthy" id="user-status">Healthy</div>
+                    <div class="metrics">
+                        <div class="metric"><span>Active Users:</span> <span id="user-active">2,341</span></div>
+                        <div class="metric"><span>Latency P95:</span> <span id="user-latency">67ms</span></div>
+                        <div class="metric"><span>Cache Hit:</span> <span id="user-cache">94%</span></div>
+                    </div>
+                </div>
+                
+                <div class="service">
+                    <h3>📦 Order Service</h3>
+                    <div class="status healthy" id="order-status">Healthy</div>
+                    <div class="metrics">
+                        <div class="metric"><span>Orders/min:</span> <span id="order-rate">89</span></div>
+                        <div class="metric"><span>Latency P95:</span> <span id="order-latency">156ms</span></div>
+                        <div class="metric"><span>Success Rate:</span> <span id="order-success">99.8%</span></div>
+                    </div>
+                </div>
+                
+                <div class="service">
+                    <h3>💳 Payment Service</h3>
+                    <div class="status healthy" id="payment-status">Healthy</div>
+                    <div class="metrics">
+                        <div class="metric"><span>Payments/min:</span> <span id="payment-rate">87</span></div>
+                        <div class="metric"><span>Latency P95:</span> <span id="payment-latency">234ms</span></div>
+                        <div class="metric"><span>Circuit Breaker:</span> <span id="payment-cb">Closed</span></div>
+                    </div>
+                </div>
+                
+                <div class="service">
+                    <h3>📧 Notification Service</h3>
+                    <div class="status healthy" id="notification-status">Healthy</div>
+                    <div class="metrics">
+                        <div class="metric"><span>Messages/min:</span> <span id="notification-rate">156</span></div>
+                        <div class="metric"><span>Latency P95:</span> <span id="notification-latency">89ms</span></div>
+                        <div class="metric"><span>Delivery Rate:</span> <span id="notification-delivery">99.9%</span></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <script>
+            // Simulate real-time metrics updates
+            function updateMetrics() {
+                const services = ['frontend', 'gateway', 'user', 'order', 'payment', 'notification'];
+                services.forEach(service => {
+                    // Simulate varying latencies
+                    const latencyElement = document.getElementById(service + '-latency');
+                    if (latencyElement) {
+                        const baseLatency = Math.random() * 100 + 50;
+                        latencyElement.textContent = Math.round(baseLatency) + 'ms';
+                    }
+                    
+                    // Simulate varying request rates
+                    const rpsElement = document.getElementById(service + '-rps') || document.getElementById(service + '-rate');
+                    if (rpsElement) {
+                        const baseRate = Math.random() * 200 + 800;
+                        rpsElement.textContent = Math.round(baseRate);
+                    }
+                });
+            }
+            
+            function injectLatency() {
+                alert('🐌 Latency injection activated! Watch the metrics increase.');
+                document.getElementById('payment-latency').textContent = '2,500ms';
+                document.getElementById('payment-status').className = 'status unhealthy';
+                document.getElementById('payment-status').textContent = 'High Latency';
+            }
+            
+            function injectErrors() {
+                alert('💥 Error injection activated! Circuit breaker will open soon.');
+                document.getElementById('payment-status').className = 'status unhealthy';
+                document.getElementById('payment-status').textContent = 'Errors Detected';
+                document.getElementById('payment-cb').textContent = 'Opening...';
+            }
+            
+            function triggerCircuitBreaker() {
+                alert('🔥 Circuit breaker opened! Requests are failing fast.');
+                document.getElementById('payment-status').className = 'status unhealthy';
+                document.getElementById('payment-status').textContent = 'Circuit Open';
+                document.getElementById('payment-cb').textContent = 'Open';
+            }
+            
+            function resetChaos() {
+                alert('✅ All chaos experiments reset! Services recovering.');
+                document.getElementById('payment-status').className = 'status healthy';
+                document.getElementById('payment-status').textContent = 'Healthy';
+                document.getElementById('payment-cb').textContent = 'Closed';
+                document.getElementById('payment-latency').textContent = '234ms';
+            }
+            
+            // Update metrics every 2 seconds
+            setInterval(updateMetrics, 2000);
+            updateMetrics();
+        </script>
+    </body>
+    </html>

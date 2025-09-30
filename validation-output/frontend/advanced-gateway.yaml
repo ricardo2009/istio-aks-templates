@@ -1,16 +1,16 @@
 apiVersion: networking.istio.io/v1alpha3
 kind: Gateway
 metadata:
-  name: '{{GATEWAY_NAME}}'
-  namespace: '{{NAMESPACE}}'
+  name: 'frontend-gateway'
+  namespace: 'ecommerce-demo'
   labels:
-    app: '{{SERVICE_NAME}}'
-    gateway-type: '{{GATEWAY_TYPE}}'
+    app: 'frontend'
+    gateway-type: 'public'
   annotations:
-    istio.io/description: "Advanced gateway configuration for {{SERVICE_NAME}}"
+    istio.io/description: "Advanced gateway configuration for frontend"
 spec:
   selector:
-    istio: '{{GATEWAY_SELECTOR}}'
+    istio: 'aks-istio-ingressgateway-external'
   servers:
   # HTTP Server (redirect to HTTPS)
   - port:
@@ -18,9 +18,9 @@ spec:
       name: http
       protocol: HTTP
     hosts:
-    - '{{HOST}}'
+    - 'ecommerce-demo.example.com'
     tls:
-      httpsRedirect: {{HTTPS_REDIRECT}}
+      httpsRedirect: true
   
   # HTTPS Server (main)
   - port:
@@ -28,12 +28,12 @@ spec:
       name: https
       protocol: HTTPS
     hosts:
-    - '{{HOST}}'
+    - 'ecommerce-demo.example.com'
     tls:
-      mode: '{{TLS_MODE}}'
-      credentialName: '{{TLS_SECRET_NAME}}'
-      minProtocolVersion: '{{TLS_MIN_VERSION}}'
-      maxProtocolVersion: '{{TLS_MAX_VERSION}}'
+      mode: 'SIMPLE'
+      credentialName: 'ecommerce-tls'
+      minProtocolVersion: 'TLSV1_2'
+      maxProtocolVersion: 'TLSV1_3'
       cipherSuites:
       - ECDHE-RSA-AES256-GCM-SHA384
       - ECDHE-RSA-AES128-GCM-SHA256

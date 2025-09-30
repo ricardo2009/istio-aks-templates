@@ -79,6 +79,38 @@ while [[ "$#" -gt 0 ]]; do
             PATH="$2"
             shift 2
             ;;
+        --max-connections)
+            MAX_CONNECTIONS="$2"
+            shift 2
+            ;;
+        --consecutive-5xx-errors)
+            CONSECUTIVE_5XX_ERRORS="$2"
+            shift 2
+            ;;
+        --base-ejection-time)
+            BASE_EJECTION_TIME="$2"
+            shift 2
+            ;;
+        --max-ejection-percent)
+            MAX_EJECTION_PERCENT="$2"
+            shift 2
+            ;;
+        --gateway-name)
+            GATEWAY_NAME="$2"
+            shift 2
+            ;;
+        --gateway-selector)
+            GATEWAY_SELECTOR="$2"
+            shift 2
+            ;;
+        --gateway-type)
+            GATEWAY_TYPE="$2"
+            shift 2
+            ;;
+        --tls-mode)
+            TLS_MODE="$2"
+            shift 2
+            ;;
         -o|--output-dir)
             OUTPUT_DIR="$2"
             shift 2
@@ -106,6 +138,16 @@ fi
 TEMPLATE_BASENAME=$(/usr/bin/basename "${TEMPLATE_FILE}")
 OUTPUT_FILE="${OUTPUT_DIR}/${SERVICE_NAME}/${TEMPLATE_BASENAME}"
 
+# Valores padrão adicionais para templates avançados
+GATEWAY_NAME="${SERVICE_NAME}-gateway"
+GATEWAY_SELECTOR="aks-istio-ingressgateway-external"
+GATEWAY_TYPE="public"
+TLS_MODE="SIMPLE"
+TLS_MIN_VERSION="TLSV1_2"
+TLS_MAX_VERSION="TLSV1_3"
+HTTPS_REDIRECT="true"
+MIN_HEALTH_PERCENT="30"
+
 # Renderiza o template
 /usr/bin/cp "${TEMPLATE_FILE}" "${OUTPUT_FILE}"
 
@@ -125,6 +167,14 @@ OUTPUT_FILE="${OUTPUT_DIR}/${SERVICE_NAME}/${TEMPLATE_BASENAME}"
 /usr/bin/sed -i "s/{{OUTLIER_INTERVAL}}/${OUTLIER_INTERVAL}/g" "${OUTPUT_FILE}"
 /usr/bin/sed -i "s/{{BASE_EJECTION_TIME}}/${BASE_EJECTION_TIME}/g" "${OUTPUT_FILE}"
 /usr/bin/sed -i "s/{{MAX_EJECTION_PERCENT}}/${MAX_EJECTION_PERCENT}/g" "${OUTPUT_FILE}"
+/usr/bin/sed -i "s/{{GATEWAY_NAME}}/${GATEWAY_NAME}/g" "${OUTPUT_FILE}"
+/usr/bin/sed -i "s/{{GATEWAY_SELECTOR}}/${GATEWAY_SELECTOR}/g" "${OUTPUT_FILE}"
+/usr/bin/sed -i "s/{{GATEWAY_TYPE}}/${GATEWAY_TYPE}/g" "${OUTPUT_FILE}"
+/usr/bin/sed -i "s/{{TLS_MODE}}/${TLS_MODE}/g" "${OUTPUT_FILE}"
+/usr/bin/sed -i "s/{{TLS_MIN_VERSION}}/${TLS_MIN_VERSION}/g" "${OUTPUT_FILE}"
+/usr/bin/sed -i "s/{{TLS_MAX_VERSION}}/${TLS_MAX_VERSION}/g" "${OUTPUT_FILE}"
+/usr/bin/sed -i "s/{{HTTPS_REDIRECT}}/${HTTPS_REDIRECT}/g" "${OUTPUT_FILE}"
+/usr/bin/sed -i "s/{{MIN_HEALTH_PERCENT}}/${MIN_HEALTH_PERCENT}/g" "${OUTPUT_FILE}"
 
 echo "Template '${TEMPLATE_FILE}' renderizado com sucesso em '${OUTPUT_FILE}'"
 

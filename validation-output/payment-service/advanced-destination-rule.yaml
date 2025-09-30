@@ -1,24 +1,24 @@
 apiVersion: networking.istio.io/v1alpha3
 kind: DestinationRule
 metadata:
-  name: '{{SERVICE_NAME}}-advanced-dr'
-  namespace: '{{NAMESPACE}}'
+  name: 'payment-service-advanced-dr'
+  namespace: 'ecommerce-demo'
   labels:
-    app: '{{SERVICE_NAME}}'
+    app: 'payment-service'
     version: 'v1'
   annotations:
-    istio.io/description: "Advanced resilience configuration for {{SERVICE_NAME}}"
+    istio.io/description: "Advanced resilience configuration for payment-service"
 spec:
-  host: '{{SERVICE_NAME}}.{{NAMESPACE}}.svc.cluster.local'
+  host: 'payment-service.ecommerce-demo.svc.cluster.local'
   trafficPolicy:
     # Load Balancing Strategy
     loadBalancer:
-      simple: '{{LOAD_BALANCER_TYPE}}'
+      simple: 'ROUND_ROBIN'
     
     # Connection Pool Settings
     connectionPool:
       tcp:
-        maxConnections: {{MAX_CONNECTIONS}}
+        maxConnections: 30
         connectTimeout: '10s'
         tcpNoDelay: true
         keepAlive:
@@ -26,9 +26,9 @@ spec:
           interval: '75s'
           probes: 9
       http:
-        http1MaxPendingRequests: {{MAX_PENDING_REQUESTS}}
+        http1MaxPendingRequests: 1024
         http2MaxRequests: 1000
-        maxRequestsPerConnection: {{MAX_REQUESTS_PER_CONN}}
+        maxRequestsPerConnection: 10
         maxRetries: 3
         idleTimeout: '60s'
         h2UpgradePolicy: 'UPGRADE'
@@ -36,18 +36,18 @@ spec:
     
     # Circuit Breaker / Outlier Detection
     outlierDetection:
-      consecutive5xxErrors: {{CONSECUTIVE_5XX_ERRORS}}
+      consecutive5xxErrors: 3
       consecutiveGatewayErrors: 5
-      interval: '{{OUTLIER_INTERVAL}}'
-      baseEjectionTime: '{{BASE_EJECTION_TIME}}'
-      maxEjectionPercent: {{MAX_EJECTION_PERCENT}}
-      minHealthPercent: {{MIN_HEALTH_PERCENT}}
+      interval: '10s'
+      baseEjectionTime: '60s'
+      maxEjectionPercent: 50
+      minHealthPercent: 30
       splitExternalLocalOriginErrors: true
     
     # Port-specific policies
     portLevelSettings:
     - port:
-        number: {{SERVICE_PORT}}
+        number: 80
       connectionPool:
         tcp:
           maxConnections: 50

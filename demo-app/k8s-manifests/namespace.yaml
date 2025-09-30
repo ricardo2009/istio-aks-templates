@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ecommerce-demo
+  labels:
+    istio-injection: enabled
+    istio.io/rev: asm-managed
+    name: ecommerce-demo
+  annotations:
+    istio.io/description: "E-commerce demo application namespace"

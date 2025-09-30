@@ -1,0 +1,12 @@
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: 'notification-service-mtls'
+  namespace: 'ecommerce-demo'
+spec:
+  selector:
+    matchLabels:
+      app: 'notification-service'
+  mtls:
+    mode: STRICT
+

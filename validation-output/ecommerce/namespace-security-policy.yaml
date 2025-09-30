@@ -1,0 +1,57 @@
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: 'ecommerce-demo-default-mtls'
+  namespace: 'ecommerce-demo'
+spec:
+  mtls:
+    mode: STRICT
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: 'ecommerce-demo-deny-all'
+  namespace: 'ecommerce-demo'
+spec:
+  action: DENY
+  rules:
+  - from:
+    - source:
+        notPrincipals: ["cluster.local/ns/ecommerce-demo/sa/*"]
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: 'ecommerce-demo-allow-ingress'
+  namespace: 'ecommerce-demo'
+spec:
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        principals: ["cluster.local/ns/aks-istio-ingress/sa/aks-istio-ingressgateway-external"]
+  - from:
+    - source:
+        principals: ["cluster.local/ns/aks-istio-system/sa/istiod"]
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: 'ecommerce-service-policy'
+  namespace: 'ecommerce-demo'
+spec:
+  selector:
+    matchLabels:
+      app: 'ecommerce'
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        principals: {{ALLOWED_PRINCIPALS | default('["cluster.local/ns/' + NAMESPACE + '/sa/default"]')}}
+    to:
+    - operation:
+        methods: {{ALLOWED_METHODS | default('["GET", "POST"]')}}
+        paths: {{ALLOWED_PATHS | default('["/health", "/metrics"]')}}
+  - when:
+    - key: source.ip
+      notValues: {{BLOCKED_IPS | default('["0.0.0.0/0"]')}}
