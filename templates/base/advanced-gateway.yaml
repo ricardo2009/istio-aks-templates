@@ -1,0 +1,102 @@
+apiVersion: networking.istio.io/v1alpha3
+kind: Gateway
+metadata:
+  name: '{{GATEWAY_NAME | default(SERVICE_NAME + "-gateway")}}'
+  namespace: '{{NAMESPACE}}'
+  labels:
+    app: '{{SERVICE_NAME}}'
+    gateway-type: '{{GATEWAY_TYPE | default("public")}}'
+  annotations:
+    istio.io/description: "Advanced gateway configuration for {{SERVICE_NAME}}"
+spec:
+  selector:
+    istio: '{{GATEWAY_SELECTOR | default("aks-istio-ingressgateway-external")}}'
+  servers:
+  # HTTP Server (redirect to HTTPS)
+  - port:
+      number: 80
+      name: http
+      protocol: HTTP
+    hosts:
+    {{#each HOSTS}}
+    - '{{this}}'
+    {{/each}}
+    tls:
+      httpsRedirect: {{HTTPS_REDIRECT | default(true)}}
+  
+  # HTTPS Server (main)
+  - port:
+      number: 443
+      name: https
+      protocol: HTTPS
+    hosts:
+    {{#each HOSTS}}
+    - '{{this}}'
+    {{/each}}
+    tls:
+      mode: '{{TLS_MODE | default("SIMPLE")}}'
+      credentialName: '{{TLS_SECRET_NAME}}'
+      minProtocolVersion: '{{TLS_MIN_VERSION | default("TLSV1_2")}}'
+      maxProtocolVersion: '{{TLS_MAX_VERSION | default("TLSV1_3")}}'
+      cipherSuites:
+      - ECDHE-RSA-AES256-GCM-SHA384
+      - ECDHE-RSA-AES128-GCM-SHA256
+      - ECDHE-RSA-CHACHA20-POLY1305
+      - ECDHE-ECDSA-AES256-GCM-SHA384
+      - ECDHE-ECDSA-AES128-GCM-SHA256
+      - ECDHE-ECDSA-CHACHA20-POLY1305
+  
+  # gRPC Server (if needed)
+  {{#if GRPC_ENABLED}}
+  - port:
+      number: {{GRPC_PORT | default(443)}}
+      name: grpc-tls
+      protocol: GRPC
+    hosts:
+    - '{{GRPC_HOST | default("grpc." + HOSTS[0])}}'
+    tls:
+      mode: '{{GRPC_TLS_MODE | default("SIMPLE")}}'
+      credentialName: '{{GRPC_TLS_SECRET_NAME | default(TLS_SECRET_NAME)}}'
+  {{/if}}
+  
+  # TCP Server (for non-HTTP protocols)
+  {{#if TCP_ENABLED}}
+  - port:
+      number: {{TCP_PORT}}
+      name: tcp
+      protocol: TCP
+    hosts:
+    - '{{TCP_HOST}}'
+  {{/if}}
+  
+  # Internal Gateway (mesh traffic)
+  {{#if INTERNAL_ENABLED}}
+  - port:
+      number: {{INTERNAL_PORT | default(8080)}}
+      name: http-internal
+      protocol: HTTP
+    hosts:
+    - '{{SERVICE_NAME}}.{{NAMESPACE}}.svc.cluster.local'
+  {{/if}}
+---
+# ServiceEntry for external services (if needed)
+{{#if EXTERNAL_SERVICES}}
+apiVersion: networking.istio.io/v1alpha3
+kind: ServiceEntry
+metadata:
+  name: '{{SERVICE_NAME}}-external-services'
+  namespace: '{{NAMESPACE}}'
+spec:
+  hosts:
+  {{#each EXTERNAL_SERVICES}}
+  - '{{this.host}}'
+  {{/each}}
+  ports:
+  {{#each EXTERNAL_SERVICES}}
+  - number: {{this.port}}
+    name: '{{this.name}}'
+    protocol: '{{this.protocol}}'
+  {{/each}}
+  location: MESH_EXTERNAL
+  resolution: DNS
+{{/if}}

@@ -1,0 +1,168 @@
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: '{{SERVICE_NAME}}-advanced-vs'
+  namespace: '{{NAMESPACE}}'
+  labels:
+    app: '{{SERVICE_NAME}}'
+    version: '{{VERSION | default("v1")}}'
+  annotations:
+    istio.io/description: "Advanced traffic management for {{SERVICE_NAME}}"
+spec:
+  hosts:
+  - '{{HOST}}'
+  - '{{SERVICE_NAME}}.{{NAMESPACE}}.svc.cluster.local'
+  gateways:
+  - '{{GATEWAY_NAME | default(SERVICE_NAME + "-gateway")}}'
+  - mesh
+  http:
+  # Health check route (always to stable version)
+  - name: health-check
+    match:
+    - uri:
+        exact: /health
+    - uri:
+        exact: /ready
+    - uri:
+        exact: /metrics
+    route:
+    - destination:
+        host: '{{SERVICE_NAME}}.{{NAMESPACE}}.svc.cluster.local'
+        port:
+          number: {{SERVICE_PORT | default(80)}}
+        subset: v1
+      weight: 100
+    timeout: '{{HEALTH_TIMEOUT | default("5s")}}'
+  
+  # Canary deployment route
+  - name: canary-deployment
+    match:
+    - headers:
+        canary:
+          exact: "true"
+    - headers:
+        x-canary-user:
+          regex: ".*"
+    - uri:
+        prefix: '{{CANARY_PATH_PREFIX | default("/api")}}'
+      headers:
+        x-canary-percentage:
+          regex: ".*"
+    route:
+    - destination:
+        host: '{{SERVICE_NAME}}.{{NAMESPACE}}.svc.cluster.local'
+        port:
+          number: {{SERVICE_PORT | default(80)}}
+        subset: canary
+      weight: 100
+    timeout: '{{CANARY_TIMEOUT | default("30s")}}'
+    retries:
+      attempts: {{CANARY_RETRY_ATTEMPTS | default(2)}}
+      perTryTimeout: '{{CANARY_PER_TRY_TIMEOUT | default("10s")}}'
+      retryOn: '{{CANARY_RETRY_ON | default("5xx,reset,connect-failure,refused-stream")}}'
+      retryRemoteLocalities: true
+  
+  # A/B Testing route
+  - name: ab-testing
+    match:
+    - headers:
+        x-ab-test:
+          exact: "{{AB_TEST_NAME | default('feature-x')}}"
+    route:
+    - destination:
+        host: '{{SERVICE_NAME}}.{{NAMESPACE}}.svc.cluster.local'
+        port:
+          number: {{SERVICE_PORT | default(80)}}
+        subset: v2
+      weight: 100
+    timeout: '{{AB_TIMEOUT | default("30s")}}'
+  
+  # Weighted routing (Blue-Green / Canary percentage)
+  - name: weighted-routing
+    match:
+    - uri:
+        prefix: '{{API_PREFIX | default("/api")}}'
+    route:
+    - destination:
+        host: '{{SERVICE_NAME}}.{{NAMESPACE}}.svc.cluster.local'
+        port:
+          number: {{SERVICE_PORT | default(80)}}
+        subset: v1
+      weight: {{V1_WEIGHT | default(90)}}
+    - destination:
+        host: '{{SERVICE_NAME}}.{{NAMESPACE}}.svc.cluster.local'
+        port:
+          number: {{SERVICE_PORT | default(80)}}
+        subset: v2
+      weight: {{V2_WEIGHT | default(10)}}
+    timeout: '{{API_TIMEOUT | default("30s")}}'
+    retries:
+      attempts: {{API_RETRY_ATTEMPTS | default(3)}}
+      perTryTimeout: '{{API_PER_TRY_TIMEOUT | default("10s")}}'
+      retryOn: '{{API_RETRY_ON | default("5xx,gateway-error,connect-failure,refused-stream")}}'
+      retryRemoteLocalities: false
+    
+    # Fault Injection for Chaos Engineering
+    fault:
+      delay:
+        percentage:
+          value: {{FAULT_DELAY_PERCENTAGE | default(0.0)}}
+        fixedDelay: '{{FAULT_DELAY_DURATION | default("5s")}}'
+      abort:
+        percentage:
+          value: {{FAULT_ABORT_PERCENTAGE | default(0.0)}}
+        httpStatus: {{FAULT_ABORT_STATUS | default(500)}}
+  
+  # Default route (fallback)
+  - name: default-route
+    match:
+    - uri:
+        prefix: "/"
+    route:
+    - destination:
+        host: '{{SERVICE_NAME}}.{{NAMESPACE}}.svc.cluster.local'
+        port:
+          number: {{SERVICE_PORT | default(80)}}
+        subset: v1
+      weight: 100
+    timeout: '{{DEFAULT_TIMEOUT | default("30s")}}'
+    retries:
+      attempts: {{DEFAULT_RETRY_ATTEMPTS | default(3)}}
+      perTryTimeout: '{{DEFAULT_PER_TRY_TIMEOUT | default("10s")}}'
+      retryOn: '{{DEFAULT_RETRY_ON | default("5xx,gateway-error,connect-failure,refused-stream")}}'
+    
+    # Request/Response Headers Manipulation
+    headers:
+      request:
+        set:
+          x-forwarded-proto: https
+          x-request-id: '{{REQUEST_ID_HEADER | default("%REQ(x-request-id)%")}}'
+        add:
+          x-service-version: '{{SERVICE_VERSION | default("v1")}}'
+        remove:
+        - x-internal-header
+      response:
+        set:
+          x-response-time: '{{RESPONSE_TIME_HEADER | default("%RESPONSE_DURATION%")}}'
+        add:
+          x-served-by: '{{SERVICE_NAME}}'
+        remove:
+        - x-internal-response-header
+    
+    # CORS Policy
+    corsPolicy:
+      allowOrigins:
+      - exact: '{{CORS_ORIGIN | default("https://app.example.com")}}'
+      allowMethods:
+      - GET
+      - POST
+      - PUT
+      - DELETE
+      - OPTIONS
+      allowHeaders:
+      - authorization
+      - content-type
+      - x-requested-with
+      - x-user-id
+      maxAge: '{{CORS_MAX_AGE | default("24h")}}'
+      allowCredentials: true

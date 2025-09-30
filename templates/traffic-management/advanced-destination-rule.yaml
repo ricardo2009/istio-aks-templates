@@ -1,0 +1,94 @@
+apiVersion: networking.istio.io/v1alpha3
+kind: DestinationRule
+metadata:
+  name: '{{SERVICE_NAME}}-advanced-dr'
+  namespace: '{{NAMESPACE}}'
+  labels:
+    app: '{{SERVICE_NAME}}'
+    version: '{{VERSION | default("v1")}}'
+  annotations:
+    istio.io/description: "Advanced resilience configuration for {{SERVICE_NAME}}"
+spec:
+  host: '{{SERVICE_NAME}}.{{NAMESPACE}}.svc.cluster.local'
+  trafficPolicy:
+    # Load Balancing Strategy
+    loadBalancer:
+      simple: '{{LOAD_BALANCER_TYPE | default("LEAST_REQUEST")}}'
+      consistentHash:
+        httpHeaderName: '{{CONSISTENT_HASH_HEADER | default("x-user-id")}}'
+    
+    # Connection Pool Settings
+    connectionPool:
+      tcp:
+        maxConnections: {{MAX_CONNECTIONS | default(100)}}
+        connectTimeout: '{{CONNECT_TIMEOUT | default("10s")}}'
+        tcpNoDelay: true
+        keepAlive:
+          time: '{{KEEPALIVE_TIME | default("7200s")}}'
+          interval: '{{KEEPALIVE_INTERVAL | default("75s")}}'
+          probes: {{KEEPALIVE_PROBES | default(9)}}
+      http:
+        http1MaxPendingRequests: {{MAX_PENDING_REQUESTS | default(1024)}}
+        http2MaxRequests: {{MAX_HTTP2_REQUESTS | default(1000)}}
+        maxRequestsPerConnection: {{MAX_REQUESTS_PER_CONN | default(10)}}
+        maxRetries: {{MAX_RETRIES | default(3)}}
+        idleTimeout: '{{IDLE_TIMEOUT | default("60s")}}'
+        h2UpgradePolicy: '{{H2_UPGRADE_POLICY | default("UPGRADE")}}'
+        useClientProtocol: true
+    
+    # Circuit Breaker / Outlier Detection
+    outlierDetection:
+      consecutive5xxErrors: {{CONSECUTIVE_5XX_ERRORS | default(5)}}
+      consecutiveGatewayErrors: {{CONSECUTIVE_GATEWAY_ERRORS | default(5)}}
+      interval: '{{OUTLIER_INTERVAL | default("10s")}}'
+      baseEjectionTime: '{{BASE_EJECTION_TIME | default("30s")}}'
+      maxEjectionPercent: {{MAX_EJECTION_PERCENT | default(50)}}
+      minHealthPercent: {{MIN_HEALTH_PERCENT | default(30)}}
+      splitExternalLocalOriginErrors: true
+    
+    # Port-specific policies
+    portLevelSettings:
+    - port:
+        number: {{SERVICE_PORT | default(80)}}
+      connectionPool:
+        tcp:
+          maxConnections: {{PORT_MAX_CONNECTIONS | default(50)}}
+        http:
+          http1MaxPendingRequests: {{PORT_MAX_PENDING | default(512)}}
+          maxRequestsPerConnection: {{PORT_MAX_REQ_PER_CONN | default(5)}}
+      outlierDetection:
+        consecutive5xxErrors: {{PORT_CONSECUTIVE_5XX | default(3)}}
+  
+  # Subsets for different versions
+  subsets:
+  - name: v1
+    labels:
+      version: v1
+    trafficPolicy:
+      connectionPool:
+        tcp:
+          maxConnections: {{V1_MAX_CONNECTIONS | default(80)}}
+        http:
+          maxRequestsPerConnection: {{V1_MAX_REQ_PER_CONN | default(8)}}
+  - name: v2
+    labels:
+      version: v2
+    trafficPolicy:
+      connectionPool:
+        tcp:
+          maxConnections: {{V2_MAX_CONNECTIONS | default(120)}}
+        http:
+          maxRequestsPerConnection: {{V2_MAX_REQ_PER_CONN | default(12)}}
+  - name: canary
+    labels:
+      version: canary
+    trafficPolicy:
+      connectionPool:
+        tcp:
+          maxConnections: {{CANARY_MAX_CONNECTIONS | default(20)}}
+        http:
+          maxRequestsPerConnection: {{CANARY_MAX_REQ_PER_CONN | default(2)}}
+      outlierDetection:
+        consecutive5xxErrors: {{CANARY_CONSECUTIVE_5XX | default(2)}}
+        interval: '{{CANARY_OUTLIER_INTERVAL | default("5s")}}'
+        baseEjectionTime: '{{CANARY_BASE_EJECTION_TIME | default("15s")}}'

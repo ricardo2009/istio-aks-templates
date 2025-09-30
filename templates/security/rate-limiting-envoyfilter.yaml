@@ -1,0 +1,207 @@
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: '{{SERVICE_NAME}}-rate-limit'
+  namespace: '{{NAMESPACE}}'
+  labels:
+    app: '{{SERVICE_NAME}}'
+  annotations:
+    istio.io/description: "Advanced rate limiting for {{SERVICE_NAME}}"
+spec:
+  workloadSelector:
+    labels:
+      app: '{{SERVICE_NAME}}'
+  configPatches:
+  # HTTP Connection Manager patch for rate limiting
+  - applyTo: HTTP_FILTER
+    match:
+      context: SIDECAR_INBOUND
+      listener:
+        filterChain:
+          filter:
+            name: "envoy.filters.network.http_connection_manager"
+    patch:
+      operation: INSERT_BEFORE
+      value:
+        name: envoy.filters.http.local_ratelimit
+        typed_config:
+          "@type": type.googleapis.com/udpa.type.v1.TypedStruct
+          type_url: type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit
+          value:
+            stat_prefix: local_rate_limiter
+            token_bucket:
+              max_tokens: {{MAX_TOKENS | default(100)}}
+              tokens_per_fill: {{TOKENS_PER_FILL | default(100)}}
+              fill_interval: '{{FILL_INTERVAL | default("60s")}}'
+            filter_enabled:
+              runtime_key: local_rate_limit_enabled
+              default_value:
+                numerator: 100
+                denominator: HUNDRED
+            filter_enforced:
+              runtime_key: local_rate_limit_enforced
+              default_value:
+                numerator: 100
+                denominator: HUNDRED
+            response_headers_to_add:
+            - append: false
+              header:
+                key: x-local-rate-limit
+                value: 'true'
+            local_rate_limit_per_downstream_connection: {{PER_CONNECTION_LIMIT | default(false)}}
+            
+            # Advanced rate limiting descriptors
+            descriptors:
+            # Rate limit by IP address
+            - entries:
+              - key: remote_address
+                value: '{{REMOTE_ADDRESS_DESCRIPTOR | default("%{DOWNSTREAM_REMOTE_ADDRESS}")}}'
+              token_bucket:
+                max_tokens: {{IP_MAX_TOKENS | default(50)}}
+                tokens_per_fill: {{IP_TOKENS_PER_FILL | default(50)}}
+                fill_interval: '{{IP_FILL_INTERVAL | default("60s")}}'
+            
+            # Rate limit by user ID (authenticated users)
+            - entries:
+              - key: user_id
+                value: '{{USER_ID_DESCRIPTOR | default("%{REQUEST_HEADERS:x-user-id}")}}'
+              token_bucket:
+                max_tokens: {{USER_MAX_TOKENS | default(200)}}
+                tokens_per_fill: {{USER_TOKENS_PER_FILL | default(200)}}
+                fill_interval: '{{USER_FILL_INTERVAL | default("60s")}}'
+            
+            # Rate limit by API key
+            - entries:
+              - key: api_key
+                value: '{{API_KEY_DESCRIPTOR | default("%{REQUEST_HEADERS:x-api-key}")}}'
+              token_bucket:
+                max_tokens: {{API_KEY_MAX_TOKENS | default(1000)}}
+                tokens_per_fill: {{API_KEY_TOKENS_PER_FILL | default(1000)}}
+                fill_interval: '{{API_KEY_FILL_INTERVAL | default("60s")}}'
+            
+            # Rate limit by tenant ID (multi-tenant applications)
+            - entries:
+              - key: tenant_id
+                value: '{{TENANT_ID_DESCRIPTOR | default("%{REQUEST_HEADERS:x-tenant-id}")}}'
+              token_bucket:
+                max_tokens: {{TENANT_MAX_TOKENS | default(500)}}
+                tokens_per_fill: {{TENANT_TOKENS_PER_FILL | default(500)}}
+                fill_interval: '{{TENANT_FILL_INTERVAL | default("60s")}}'
+            
+            # Rate limit by endpoint/path
+            - entries:
+              - key: path
+                value: '{{PATH_DESCRIPTOR | default("%{REQUEST_HEADERS::path}")}}'
+              token_bucket:
+                max_tokens: {{PATH_MAX_TOKENS | default(100)}}
+                tokens_per_fill: {{PATH_TOKENS_PER_FILL | default(100)}}
+                fill_interval: '{{PATH_FILL_INTERVAL | default("60s")}}'
+---
+# Global rate limiting (requires external rate limit service)
+{{#if GLOBAL_RATE_LIMITING}}
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: '{{SERVICE_NAME}}-global-rate-limit'
+  namespace: '{{NAMESPACE}}'
+spec:
+  workloadSelector:
+    labels:
+      app: '{{SERVICE_NAME}}'
+  configPatches:
+  - applyTo: HTTP_FILTER
+    match:
+      context: SIDECAR_INBOUND
+      listener:
+        filterChain:
+          filter:
+            name: "envoy.filters.network.http_connection_manager"
+    patch:
+      operation: INSERT_BEFORE
+      value:
+        name: envoy.filters.http.ratelimit
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.http.ratelimit.v3.RateLimit
+          domain: '{{RATE_LIMIT_DOMAIN | default("aks-istio")}}'
+          failure_mode_deny: {{FAILURE_MODE_DENY | default(true)}}
+          timeout: '{{RATE_LIMIT_TIMEOUT | default("0.25s")}}'
+          rate_limit_service:
+            grpc_service:
+              envoy_grpc:
+                cluster_name: rate-limit-cluster
+            transport_api_version: V3
+          rate_limited_as_resource_exhausted: true
+---
+# Rate limit service cluster configuration
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: '{{SERVICE_NAME}}-rate-limit-cluster'
+  namespace: '{{NAMESPACE}}'
+spec:
+  workloadSelector:
+    labels:
+      app: '{{SERVICE_NAME}}'
+  configPatches:
+  - applyTo: CLUSTER
+    match:
+      context: SIDECAR_INBOUND
+    patch:
+      operation: ADD
+      value:
+        name: rate-limit-cluster
+        type: STRICT_DNS
+        connect_timeout: '{{CLUSTER_CONNECT_TIMEOUT | default("0.25s")}}'
+        lb_policy: ROUND_ROBIN
+        http2_protocol_options: {}
+        load_assignment:
+          cluster_name: rate-limit-cluster
+          endpoints:
+          - lb_endpoints:
+            - endpoint:
+                address:
+                  socket_address:
+                    address: '{{RATE_LIMIT_SERVICE_HOST | default("ratelimit.istio-system.svc.cluster.local")}}'
+                    port_value: {{RATE_LIMIT_SERVICE_PORT | default(8081)}}
+{{/if}}
+---
+# Circuit breaker EnvoyFilter (additional to DestinationRule)
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: '{{SERVICE_NAME}}-circuit-breaker'
+  namespace: '{{NAMESPACE}}'
+spec:
+  workloadSelector:
+    labels:
+      app: '{{SERVICE_NAME}}'
+  configPatches:
+  - applyTo: HTTP_FILTER
+    match:
+      context: SIDECAR_INBOUND
+      listener:
+        filterChain:
+          filter:
+            name: "envoy.filters.network.http_connection_manager"
+    patch:
+      operation: INSERT_BEFORE
+      value:
+        name: envoy.filters.http.fault
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.http.fault.v3.HTTPFault
+          abort:
+            percentage:
+              numerator: {{CIRCUIT_BREAKER_ABORT_PERCENTAGE | default(0)}}
+              denominator: HUNDRED
+            http_status: {{CIRCUIT_BREAKER_ABORT_STATUS | default(503)}}
+          delay:
+            percentage:
+              numerator: {{CIRCUIT_BREAKER_DELAY_PERCENTAGE | default(0)}}
+              denominator: HUNDRED
+            fixed_delay: '{{CIRCUIT_BREAKER_DELAY_DURATION | default("5s")}}'
+          response_rate_limit:
+            percentage:
+              numerator: {{RESPONSE_RATE_LIMIT_PERCENTAGE | default(0)}}
+              denominator: HUNDRED
+            fixed_limit:
+              limit_kbps: {{RESPONSE_RATE_LIMIT_KBPS | default(1000)}}

@@ -1,0 +1,380 @@
+name: 🚀 Deploy E-commerce Platform Demo
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform'
+        required: true
+        default: 'deploy'
+        type: choice
+        options:
+        - deploy
+        - destroy
+        - canary-deploy
+        - rollback
+        - chaos-test
+        - load-test
+      environment:
+        description: 'Target environment'
+        required: true
+        default: 'demo'
+        type: choice
+        options:
+        - demo
+        - staging
+        - production
+      canary_percentage:
+        description: 'Canary deployment percentage (0-100)'
+        required: false
+        default: '10'
+      chaos_scenario:
+        description: 'Chaos engineering scenario'
+        required: false
+        default: 'payment-latency'
+        type: choice
+        options:
+        - payment-latency
+        - order-service-failure
+        - network-partition
+        - cpu-stress
+        - memory-stress
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  NAMESPACE: ecommerce-${{ github.event.inputs.environment }}
+  DOMAIN: ecommerce-${{ github.event.inputs.environment }}.aks-labs.com
+  CLUSTER_NAME: aks-labs
+  RESOURCE_GROUP: rg-aks-labs
+
+jobs:
+  deploy-infrastructure:
+    if: github.event.inputs.action == 'deploy'
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🔐 Azure Login
+        uses: azure/login@v1
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: ⚙️ Set AKS context
+        uses: azure/aks-set-context@v3
+        with:
+          resource-group: ${{ env.RESOURCE_GROUP }}
+          cluster-name: ${{ env.CLUSTER_NAME }}
+
+      - name: 🏗️ Create namespace and enable Istio injection
+        run: |
+          kubectl create namespace ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+          kubectl label namespace ${{ env.NAMESPACE }} istio-injection=enabled --overwrite
+          kubectl annotate namespace ${{ env.NAMESPACE }} istio.io/rev=asm-managed --overwrite
+
+      - name: 🔒 Deploy security policies
+        run: |
+          chmod +x scripts/render.sh
+          
+          # Namespace-wide security policy
+          ./scripts/render.sh -f templates/security/namespace-security-policy.yaml \
+            -s namespace-wide -n ${{ env.NAMESPACE }} -o manifests/security
+          
+          # Apply security policies
+          kubectl apply -f manifests/security/
+
+      - name: 🌐 Deploy gateway and networking
+        run: |
+          # Advanced Gateway
+          ./scripts/render.sh -f templates/base/advanced-gateway.yaml \
+            -s ecommerce-gateway -n ${{ env.NAMESPACE }} -h ${{ env.DOMAIN }} \
+            --tls-secret ecommerce-tls -o manifests/networking
+          
+          kubectl apply -f manifests/networking/
+
+      - name: 📊 Deploy observability
+        run: |
+          # Advanced Telemetry
+          ./scripts/render.sh -f templates/observability/advanced-telemetry.yaml \
+            -s ecommerce-telemetry -n ${{ env.NAMESPACE }} -o manifests/observability
+          
+          kubectl apply -f manifests/observability/
+
+      - name: 🚀 Deploy microservices
+        run: |
+          # Deploy all microservices with advanced configurations
+          for service in frontend api-gateway user-service order-service payment-service notification-service; do
+            echo "Deploying $service..."
+            
+            # Advanced DestinationRule
+            ./scripts/render.sh -f templates/traffic-management/advanced-destination-rule.yaml \
+              -s $service -n ${{ env.NAMESPACE }} --service-port 80 -o manifests/services/$service
+            
+            # Advanced VirtualService
+            ./scripts/render.sh -f templates/traffic-management/advanced-virtual-service.yaml \
+              -s $service -n ${{ env.NAMESPACE }} -h ${{ env.DOMAIN }} \
+              --service-port 80 --gateway-name ecommerce-gateway -o manifests/services/$service
+            
+            # Rate Limiting
+            ./scripts/render.sh -f templates/security/rate-limiting-envoyfilter.yaml \
+              -s $service -n ${{ env.NAMESPACE }} -o manifests/services/$service
+            
+            # Apply service configurations
+            kubectl apply -f manifests/services/$service/
+          done
+
+      - name: 📋 Deploy application workloads
+        run: |
+          kubectl apply -f demo-app/k8s-manifests/ -n ${{ env.NAMESPACE }}
+
+      - name: ✅ Verify deployment
+        run: |
+          echo "🔍 Checking deployment status..."
+          kubectl get pods -n ${{ env.NAMESPACE }}
+          kubectl get gateways,virtualservices,destinationrules -n ${{ env.NAMESPACE }}
+          kubectl get peerauthentication,authorizationpolicy -n ${{ env.NAMESPACE }}
+          
+          echo "🌐 Waiting for services to be ready..."
+          kubectl wait --for=condition=ready pod -l app=frontend -n ${{ env.NAMESPACE }} --timeout=300s
+          kubectl wait --for=condition=ready pod -l app=api-gateway -n ${{ env.NAMESPACE }} --timeout=300s
+          
+          echo "🎉 Deployment completed successfully!"
+          echo "🌍 Application URL: https://${{ env.DOMAIN }}"
+
+  canary-deploy:
+    if: github.event.inputs.action == 'canary-deploy'
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🔐 Azure Login
+        uses: azure/login@v1
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: ⚙️ Set AKS context
+        uses: azure/aks-set-context@v3
+        with:
+          resource-group: ${{ env.RESOURCE_GROUP }}
+          cluster-name: ${{ env.CLUSTER_NAME }}
+
+      - name: 🐤 Deploy canary version
+        run: |
+          chmod +x scripts/render.sh
+          
+          CANARY_PERCENTAGE=${{ github.event.inputs.canary_percentage }}
+          STABLE_PERCENTAGE=$((100 - CANARY_PERCENTAGE))
+          
+          echo "🚀 Deploying canary with ${CANARY_PERCENTAGE}% traffic"
+          
+          # Update VirtualService for canary deployment
+          ./scripts/render.sh -f templates/traffic-management/advanced-virtual-service.yaml \
+            -s order-service -n ${{ env.NAMESPACE }} -h ${{ env.DOMAIN }} \
+            --service-port 80 --gateway-name ecommerce-gateway \
+            --v1-weight $STABLE_PERCENTAGE --v2-weight $CANARY_PERCENTAGE \
+            -o manifests/canary
+          
+          kubectl apply -f manifests/canary/
+
+      - name: 📊 Monitor canary deployment
+        run: |
+          echo "📈 Monitoring canary deployment for 5 minutes..."
+          
+          for i in {1..30}; do
+            echo "📊 Checking metrics (${i}/30)..."
+            
+            # Check error rate
+            ERROR_RATE=$(kubectl exec -n ${{ env.NAMESPACE }} deployment/prometheus -- \
+              promtool query instant 'rate(istio_requests_total{destination_service_name="order-service",response_code!~"2.."}[1m]) / rate(istio_requests_total{destination_service_name="order-service"}[1m]) * 100' || echo "0")
+            
+            echo "Current error rate: ${ERROR_RATE}%"
+            
+            # Rollback if error rate > 5%
+            if (( $(echo "$ERROR_RATE > 5" | bc -l) )); then
+              echo "🚨 Error rate too high! Rolling back..."
+              ./scripts/render.sh -f templates/traffic-management/advanced-virtual-service.yaml \
+                -s order-service -n ${{ env.NAMESPACE }} -h ${{ env.DOMAIN }} \
+                --service-port 80 --gateway-name ecommerce-gateway \
+                --v1-weight 100 --v2-weight 0 \
+                -o manifests/rollback
+              kubectl apply -f manifests/rollback/
+              exit 1
+            fi
+            
+            sleep 10
+          done
+          
+          echo "✅ Canary deployment successful!"
+
+  chaos-test:
+    if: github.event.inputs.action == 'chaos-test'
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🔐 Azure Login
+        uses: azure/login@v1
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: ⚙️ Set AKS context
+        uses: azure/aks-set-context@v3
+        with:
+          resource-group: ${{ env.RESOURCE_GROUP }}
+          cluster-name: ${{ env.CLUSTER_NAME }}
+
+      - name: 🔥 Execute chaos engineering test
+        run: |
+          chmod +x scripts/render.sh
+          
+          SCENARIO=${{ github.event.inputs.chaos_scenario }}
+          echo "🔥 Executing chaos scenario: $SCENARIO"
+          
+          case $SCENARIO in
+            "payment-latency")
+              echo "💳 Injecting latency in payment service..."
+              ./scripts/render.sh -f templates/traffic-management/advanced-virtual-service.yaml \
+                -s payment-service -n ${{ env.NAMESPACE }} -h ${{ env.DOMAIN }} \
+                --service-port 80 --gateway-name ecommerce-gateway \
+                --fault-delay-percentage 50 --fault-delay-duration 5s \
+                -o manifests/chaos
+              ;;
+            "order-service-failure")
+              echo "📦 Injecting failures in order service..."
+              ./scripts/render.sh -f templates/traffic-management/advanced-virtual-service.yaml \
+                -s order-service -n ${{ env.NAMESPACE }} -h ${{ env.DOMAIN }} \
+                --service-port 80 --gateway-name ecommerce-gateway \
+                --fault-abort-percentage 20 --fault-abort-status 500 \
+                -o manifests/chaos
+              ;;
+            *)
+              echo "❓ Unknown chaos scenario: $SCENARIO"
+              exit 1
+              ;;
+          esac
+          
+          kubectl apply -f manifests/chaos/
+          
+          echo "⏱️ Running chaos test for 2 minutes..."
+          sleep 120
+          
+          echo "🔄 Restoring normal operation..."
+          ./scripts/render.sh -f templates/traffic-management/advanced-virtual-service.yaml \
+            -s payment-service -n ${{ env.NAMESPACE }} -h ${{ env.DOMAIN }} \
+            --service-port 80 --gateway-name ecommerce-gateway \
+            --fault-delay-percentage 0 --fault-abort-percentage 0 \
+            -o manifests/restore
+          kubectl apply -f manifests/restore/
+          
+          echo "✅ Chaos test completed!"
+
+  load-test:
+    if: github.event.inputs.action == 'load-test'
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🔐 Azure Login
+        uses: azure/login@v1
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: ⚙️ Set AKS context
+        uses: azure/aks-set-context@v3
+        with:
+          resource-group: ${{ env.RESOURCE_GROUP }}
+          cluster-name: ${{ env.CLUSTER_NAME }}
+
+      - name: 🏋️ Execute load test
+        run: |
+          echo "🏋️ Starting load test against https://${{ env.DOMAIN }}"
+          
+          # Install fortio
+          kubectl run fortio --image=fortio/fortio --rm -i --restart=Never -- \
+            load -c 50 -t 300s -qps 100 https://${{ env.DOMAIN }}/api/health
+          
+          echo "📊 Load test completed!"
+
+  destroy:
+    if: github.event.inputs.action == 'destroy'
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🔐 Azure Login
+        uses: azure/login@v1
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: ⚙️ Set AKS context
+        uses: azure/aks-set-context@v3
+        with:
+          resource-group: ${{ env.RESOURCE_GROUP }}
+          cluster-name: ${{ env.CLUSTER_NAME }}
+
+      - name: 🗑️ Destroy deployment
+        run: |
+          echo "🗑️ Destroying e-commerce platform in namespace ${{ env.NAMESPACE }}"
+          
+          # Delete all Istio configurations
+          kubectl delete gateway,virtualservice,destinationrule,peerauthentication,authorizationpolicy,telemetry,envoyfilter -n ${{ env.NAMESPACE }} --all
+          
+          # Delete application workloads
+          kubectl delete all -n ${{ env.NAMESPACE }} --all
+          
+          # Delete namespace
+          kubectl delete namespace ${{ env.NAMESPACE }} --ignore-not-found=true
+          
+          echo "✅ Destruction completed!"
+
+  report:
+    if: always()
+    needs: [deploy-infrastructure, canary-deploy, chaos-test, load-test, destroy]
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📊 Generate deployment report
+        run: |
+          echo "# 🚀 E-commerce Platform Demo Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 📋 Execution Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Action**: ${{ github.event.inputs.action }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment**: ${{ github.event.inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Namespace**: ${{ env.NAMESPACE }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Domain**: https://${{ env.DOMAIN }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Timestamp**: $(date -u)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "${{ github.event.inputs.action }}" == "canary-deploy" ]]; then
+            echo "## 🐤 Canary Deployment Details" >> $GITHUB_STEP_SUMMARY
+            echo "- **Canary Percentage**: ${{ github.event.inputs.canary_percentage }}%" >> $GITHUB_STEP_SUMMARY
+            echo "- **Stable Percentage**: $((100 - ${{ github.event.inputs.canary_percentage }}))%" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [[ "${{ github.event.inputs.action }}" == "chaos-test" ]]; then
+            echo "## 🔥 Chaos Engineering Details" >> $GITHUB_STEP_SUMMARY
+            echo "- **Scenario**: ${{ github.event.inputs.chaos_scenario }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Duration**: 2 minutes" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 🔗 Useful Links" >> $GITHUB_STEP_SUMMARY
+          echo "- [Application URL](https://${{ env.DOMAIN }})" >> $GITHUB_STEP_SUMMARY
+          echo "- [Azure Portal](https://portal.azure.com)" >> $GITHUB_STEP_SUMMARY
+          echo "- [GitHub Repository](https://github.com/${{ github.repository }})" >> $GITHUB_STEP_SUMMARY
