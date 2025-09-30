@@ -1,0 +1,29 @@
+apiVersion: networking.istio.io/v1alpha3
+kind: DestinationRule
+metadata:
+  name: '{{SERVICE_NAME}}-dr'
+  namespace: '{{NAMESPACE}}'
+spec:
+  host: '{{SERVICE_NAME}}'
+  trafficPolicy:
+    loadBalancer:
+      simple: '{{LOAD_BALANCER_TYPE | default("ROUND_ROBIN")}}' # e.g., ROUND_ROBIN, LEAST_CONN
+    connectionPool:
+      tcp:
+        maxConnections: {{MAX_CONNECTIONS | default(100)}}
+      http:
+        http1MaxPendingRequests: {{MAX_PENDING_REQUESTS | default(1024)}}
+        maxRequestsPerConnection: {{MAX_REQUESTS_PER_CONN | default(10)}}
+    outlierDetection:
+      consecutive5xxErrors: {{CONSECUTIVE_5XX_ERRORS | default(5)}} # Number of 5xx errors before ejection
+      interval: '{{OUTLIER_INTERVAL | default("10s")}}' # Time interval for ejection analysis
+      baseEjectionTime: '{{BASE_EJECTION_TIME | default("30s")}}' # Minimum ejection duration
+      maxEjectionPercent: {{MAX_EJECTION_PERCENT | default(50)}} # Max % of pods to be ejected
+  subsets:
+  - name: v1
+    labels:
+      version: v1
+  - name: v2
+    labels:
+      version: v2
+

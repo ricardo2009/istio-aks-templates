@@ -1,0 +1,15 @@
+apiVersion: telemetry.istio.io/v1
+kind: Telemetry
+metadata:
+  name: '{{NAMESPACE}}-telemetry'
+  namespace: '{{NAMESPACE}}'
+spec:
+  # Descomente para habilitar o rastreamento com uma taxa de amostragem de 50%
+  # tracing:
+  # - randomSamplingPercentage: 50.00
+  accessLogging:
+  - providers:
+    - name: envoy
+    # Descomente para desabilitar os logs de acesso para todo o namespace
+    # disabled: true
+

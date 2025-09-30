@@ -1,0 +1,19 @@
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: '{{SERVICE_NAME}}-authz'
+  namespace: '{{NAMESPACE}}'
+spec:
+  selector:
+    matchLabels:
+      app: '{{SERVICE_NAME}}'
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        principals: ["cluster.local/ns/{{NAMESPACE}}/sa/{{CALLER_SERVICE_ACCOUNT}}"]
+    to:
+    - operation:
+        methods: ["{{METHOD}}"]
+        paths: ["{{PATH}}"]
+

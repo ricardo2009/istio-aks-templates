@@ -1,0 +1,167 @@
+# Análise da Aplicação Pets - Estado Atual
+# Esta é uma simulação baseada em padrões comuns de aplicações em clusters AKS
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pets-api
+  namespace: pets
+  labels:
+    app: pets-api
+    version: v1
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: pets-api
+      version: v1
+  template:
+    metadata:
+      labels:
+        app: pets-api
+        version: v1
+    spec:
+      containers:
+      - name: pets-api
+        image: pets/api:1.0.0
+        ports:
+        - containerPort: 8080
+        env:
+        - name: DATABASE_URL
+          value: "postgresql://pets-db:5432/pets"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pets-api
+  namespace: pets
+  labels:
+    app: pets-api
+spec:
+  selector:
+    app: pets-api
+  ports:
+  - port: 80
+    targetPort: 8080
+    protocol: TCP
+  type: ClusterIP
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pets-frontend
+  namespace: pets
+  labels:
+    app: pets-frontend
+    version: v1
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: pets-frontend
+      version: v1
+  template:
+    metadata:
+      labels:
+        app: pets-frontend
+        version: v1
+    spec:
+      containers:
+      - name: pets-frontend
+        image: pets/frontend:1.0.0
+        ports:
+        - containerPort: 3000
+        env:
+        - name: API_URL
+          value: "http://pets-api"
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pets-frontend
+  namespace: pets
+  labels:
+    app: pets-frontend
+spec:
+  selector:
+    app: pets-frontend
+  ports:
+  - port: 80
+    targetPort: 3000
+    protocol: TCP
+  type: ClusterIP
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pets-db
+  namespace: pets
+  labels:
+    app: pets-db
+    version: v1
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pets-db
+      version: v1
+  template:
+    metadata:
+      labels:
+        app: pets-db
+        version: v1
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:13
+        ports:
+        - containerPort: 5432
+        env:
+        - name: POSTGRES_DB
+          value: "pets"
+        - name: POSTGRES_USER
+          value: "pets"
+        - name: POSTGRES_PASSWORD
+          value: "pets123"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "200m"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pets-db
+  namespace: pets
+  labels:
+    app: pets-db
+spec:
+  selector:
+    app: pets-db
+  ports:
+  - port: 5432
+    targetPort: 5432
+    protocol: TCP
+  type: ClusterIP
