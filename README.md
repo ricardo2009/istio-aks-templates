@@ -563,6 +563,43 @@ Dica: utilize labels e anotações geradas pelos macros para rastrear deployment
 - Utilize um segundo passo (ou job) com credenciais de cluster para aplicar os manifests renderizados.
 - Para Pull Requests, execute o renderizador em modo `--strict` e valide as saídas com `kubectl apply --dry-run=client`.
 
+## 🧪 Validação e Testes
+
+### Validação Completa de Todos os Ambientes
+
+```bash
+# Validar todos os ambientes (production, staging, default)
+python scripts/validate_templates.py -t templates
+```
+
+Este script automaticamente:
+- ✅ Descobre todos os arquivos `values*.yaml`
+- ✅ Renderiza templates para cada ambiente
+- ✅ Valida sintaxe YAML dos manifests gerados
+- ✅ Exibe resumo completo de sucesso/falha
+
+### Validação Individual
+
+```bash
+# Validar apenas staging com modo strict
+python scripts/helm_render.py \
+  -t templates \
+  -v templates/values-staging.yaml \
+  -o /tmp/test \
+  --strict
+
+# Lint YAML dos arquivos de valores
+yamllint templates/values*.yaml
+```
+
+### Checklist Antes de Commit
+
+- [ ] `yamllint templates/values*.yaml` - sem erros
+- [ ] `python scripts/validate_templates.py -t templates` - todos ambientes passaram
+- [ ] Templates renderizados com `--strict` para todos os ambientes
+
+Para mais detalhes, veja [Guia de Validação](docs/VALIDATION.md).
+
 ## Próximos passos sugeridos
 
 - Expandir `templates/modules/workloads` com recursos adicionais (por exemplo, PodDisruptionBudget).
