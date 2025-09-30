@@ -4,7 +4,7 @@
 # Configurações da aplicação
 app:
   name: pets
-  version: "1.0.0"
+  version: 1.0.0
   namespace: pets
 
 # Metadados padrão
@@ -26,7 +26,6 @@ network:
     tls:
       enabled: true
       secretName: pets-tls
-  
   virtualservice:
     name: pets
     gateways:
