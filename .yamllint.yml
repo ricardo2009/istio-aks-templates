@@ -71,3 +71,12 @@ ignore: |
   .git/
   *.tmp
   *.temp
+  manifests/
+  generated/
+
+# Ignorar templates com sintaxe Jinja2 (contém {{ }})
+# yamllint irá validar apenas os arquivos values-*.yaml
+yaml-files:
+  - '*.yaml'
+  - '*.yml'
+  - '.yamllint'

@@ -3,14 +3,16 @@ name: Deploy Istio Templates
 on:
   push:
     branches: [main]
-    paths: 
+    paths:
       - 'templates/**'
       - 'scripts/**'
+      - '.github/workflows/**'
   pull_request:
     branches: [main]
-    paths: 
+    paths:
       - 'templates/**'
       - 'scripts/**'
+      - '.github/workflows/**'
 
 env:
   PYTHON_VERSION: '3.11'
@@ -27,20 +29,46 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
 
       - name: Install dependencies
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
-
-      - name: Lint YAML files
-        run: |
           pip install yamllint
-          yamllint templates/
 
-      - name: Validate template syntax
+      - name: Lint YAML values files
         run: |
-          python scripts/helm_render.py -t templates -v templates/values.yaml -o manifests/validation
+          echo "🔍 Validando sintaxe YAML dos arquivos de valores..."
+          yamllint templates/values*.yaml
+
+      - name: Validate all environments
+        run: |
+          echo "🧪 Executando validação completa de todos os ambientes..."
+          python scripts/validate_templates.py -t templates
+
+      - name: Test rendering - Default
+        run: |
+          echo "📝 Testando renderização ambiente padrão..."
+          python scripts/helm_render.py -t templates -v templates/values.yaml -o /tmp/manifests/default --strict
+
+      - name: Test rendering - Staging
+        run: |
+          echo "📝 Testando renderização staging..."
+          python scripts/helm_render.py -t templates -v templates/values-staging.yaml -o /tmp/manifests/staging --strict
+
+      - name: Test rendering - Production
+        run: |
+          echo "📝 Testando renderização production..."
+          python scripts/helm_render.py -t templates -v templates/values-production.yaml -o /tmp/manifests/production --strict
+
+      - name: Upload validation artifacts
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: validation-manifests
+          path: /tmp/manifests/
+          retention-days: 7
 
   deploy-staging:
     name: Deploy to Staging
@@ -56,6 +84,7 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
 
       - name: Install dependencies
         run: |
@@ -64,7 +93,15 @@ jobs:
 
       - name: Render staging manifests
         run: |
-          python scripts/helm_render.py -t templates -v templates/values-staging.yaml -o manifests/staging
+          echo "🔧 Renderizando manifests para staging..."
+          python scripts/helm_render.py -t templates -v templates/values-staging.yaml -o manifests/staging --strict
+
+      - name: Upload staging manifests
+        uses: actions/upload-artifact@v3
+        with:
+          name: staging-manifests
+          path: manifests/staging/
+          retention-days: 30
 
       - name: Setup Azure CLI
         uses: azure/login@v1
@@ -73,14 +110,16 @@ jobs:
 
       - name: Get AKS credentials
         run: |
-          az aks get-credentials --resource-group ${{ secrets.AKS_RESOURCE_GROUP }} --name ${{ secrets.AKS_CLUSTER_NAME_STAGING }}
+          az aks get-credentials --resource-group ${{ secrets.AKS_RESOURCE_GROUP }} --name ${{ secrets.AKS_CLUSTER_NAME_STAGING }} --overwrite-existing
 
       - name: Deploy to AKS Staging
         run: |
+          echo "🚀 Aplicando manifests no cluster staging..."
           kubectl apply -f manifests/staging/
 
       - name: Verify deployment
         run: |
+          echo "✅ Verificando recursos criados..."
           kubectl get gateway,virtualservice,destinationrule,peerauthentication -n pets-staging
 
   deploy-production:
@@ -97,6 +136,7 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
 
       - name: Install dependencies
         run: |
@@ -105,7 +145,15 @@ jobs:
 
       - name: Render production manifests
         run: |
-          python scripts/helm_render.py -t templates -v templates/values-production.yaml -o manifests/production
+          echo "🔧 Renderizando manifests para production..."
+          python scripts/helm_render.py -t templates -v templates/values-production.yaml -o manifests/production --strict
+
+      - name: Upload production manifests
+        uses: actions/upload-artifact@v3
+        with:
+          name: production-manifests
+          path: manifests/production/
+          retention-days: 90
 
       - name: Setup Azure CLI
         uses: azure/login@v1
@@ -114,12 +162,14 @@ jobs:
 
       - name: Get AKS credentials
         run: |
-          az aks get-credentials --resource-group ${{ secrets.AKS_RESOURCE_GROUP }} --name ${{ secrets.AKS_CLUSTER_NAME_PROD }}
+          az aks get-credentials --resource-group ${{ secrets.AKS_RESOURCE_GROUP }} --name ${{ secrets.AKS_CLUSTER_NAME_PROD }} --overwrite-existing
 
       - name: Deploy to AKS Production
         run: |
+          echo "🚀 Aplicando manifests no cluster production..."
           kubectl apply -f manifests/production/
 
       - name: Verify deployment
         run: |
+          echo "✅ Verificando recursos criados..."
           kubectl get gateway,virtualservice,destinationrule,peerauthentication -n pets-prod

@@ -142,9 +142,13 @@ def render_templates(args: argparse.Namespace) -> None:
         print(f"Nenhum template encontrado em: {args.templates_dir}")
         return
     
+    rendered_count = 0
+    error_count = 0
+    
     for template_path in sorted(template_files):
-        # Pula o arquivo values.yaml
-        if template_path.name == "values.yaml":
+        # Pula arquivos de valores (values.yaml, values-*.yaml)
+        if template_path.name.startswith("values"):
+            print(f"⊘ Ignorado (arquivo de valores): {template_path.name}")
             continue
             
         template_name = template_path.name
@@ -171,26 +175,48 @@ def render_templates(args: argparse.Namespace) -> None:
                 output_path = args.output_dir / template_name
                 output_path.write_text(rendered + '\n', encoding="utf-8")
                 print(f"✓ Renderizado: {output_path}")
+                rendered_count += 1
             else:
                 print(f"⚠ Template vazio: {template_name}")
                 
         except Exception as e:
             print(f"✗ Erro ao renderizar {template_name}: {e}")
+            error_count += 1
+            if args.strict:
+                raise
+    
+    print(f"\n📊 Resumo: {rendered_count} templates renderizados, {error_count} erros")
+    
+    if error_count > 0:
+        raise SystemExit(1)
 
 
 def main() -> None:
-    args = parse_args()
-    
-    if not args.templates_dir.exists():
-        print(f"Erro: Diretório de templates não encontrado: {args.templates_dir}")
-        return
-    
-    if not args.values.exists():
-        print(f"Aviso: Arquivo values não encontrado: {args.values}")
-        print("Continuando com valores padrão...")
-    
-    render_templates(args)
-    print(f"\n📁 Manifests gerados em: {args.output_dir}")
+    try:
+        args = parse_args()
+        
+        if not args.templates_dir.exists():
+            print(f"❌ Erro: Diretório de templates não encontrado: {args.templates_dir}")
+            raise SystemExit(1)
+        
+        if not args.values.exists():
+            print(f"⚠️  Aviso: Arquivo values não encontrado: {args.values}")
+            print("Continuando com valores padrão...")
+        
+        print(f"🔧 Renderizando templates de: {args.templates_dir}")
+        print(f"📋 Usando valores de: {args.values}")
+        print(f"📁 Saída: {args.output_dir}\n")
+        
+        render_templates(args)
+        print(f"\n✅ Sucesso! Manifests gerados em: {args.output_dir}")
+        
+    except SystemExit:
+        raise
+    except Exception as e:
+        print(f"\n❌ Erro fatal: {e}")
+        import traceback
+        traceback.print_exc()
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

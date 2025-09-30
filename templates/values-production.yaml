@@ -4,7 +4,7 @@
 # Configurações da aplicação
 app:
   name: pets
-  version: "1.0.0"
+  version: 1.0.0
   namespace: pets-prod
 
 # Metadados específicos de produção
@@ -16,7 +16,7 @@ metadata:
   annotations:
     owner: platform-team@contoso.com
     deployment-strategy: canary
-    sla: "99.9%"
+    sla: 99.9%
     monitoring: enabled
 
 # Configurações de rede para produção
@@ -30,7 +30,7 @@ network:
     tls:
       enabled: true
       secretName: pets-prod-tls
-  
+
   virtualservice:
     name: pets-prod
     gateways:

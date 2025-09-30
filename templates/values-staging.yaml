@@ -4,7 +4,7 @@
 # Configurações específicas do staging
 app:
   name: pets
-  version: "1.0.0"
+  version: 1.0.0
   namespace: pets-staging
 
 # Metadados específicos
@@ -27,7 +27,7 @@ network:
     tls:
       enabled: true
       secretName: pets-staging-tls
-  
+
   virtualservice:
     name: pets-staging
     gateways:
