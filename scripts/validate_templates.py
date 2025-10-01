@@ -1,16 +1,13 @@
 #!/usr/bin/env python3
-"""Script de validação para templates Istio.
+"""Script de validação para manifestos Istio Demo Lab.
 
-Este script valida que todos os templates podem ser renderizados corretamente
-para todos os ambientes configurados.
+Este script valida a sintaxe YAML e estrutura dos manifestos.
 """
 from __future__ import annotations
 
 import argparse
 import sys
-import tempfile
 from pathlib import Path
-from typing import List
 
 import yaml
 
@@ -19,138 +16,95 @@ def validate_yaml_syntax(file_path: Path) -> tuple[bool, str]:
     """Valida a sintaxe YAML de um arquivo."""
     try:
         with file_path.open('r', encoding='utf-8') as f:
-            yaml.safe_load(f)
+            content = yaml.safe_load(f)
+            if content is None:
+                return False, "Arquivo vazio ou inválido"
+            if not isinstance(content, dict):
+                return False, "Conteúdo deve ser um objeto YAML"
         return True, "OK"
     except yaml.YAMLError as e:
         return False, str(e)
 
 
-def render_environment(templates_dir: Path, values_file: Path, env_name: str) -> bool:
-    """Renderiza templates para um ambiente específico."""
-    import subprocess
-    
-    print(f"\n{'=' * 60}")
-    print(f"🔍 Validando ambiente: {env_name}")
-    print(f"{'=' * 60}")
-    
-    # Cria diretório temporário para output
-    with tempfile.TemporaryDirectory() as tmpdir:
-        output_dir = Path(tmpdir) / env_name
+def validate_istio_manifest(file_path: Path) -> tuple[bool, str]:
+    """Valida estrutura básica de um manifest Istio/Kubernetes."""
+    try:
+        with file_path.open('r', encoding='utf-8') as f:
+            content = yaml.safe_load(f)
         
-        # Executa o renderizador
-        cmd = [
-            sys.executable,
-            str(templates_dir.parent / "scripts" / "helm_render.py"),
-            "-t", str(templates_dir),
-            "-v", str(values_file),
-            "-o", str(output_dir),
-            "--strict"
-        ]
+        required_fields = ['apiVersion', 'kind', 'metadata']
+        missing = [field for field in required_fields if field not in content]
         
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=False
-            )
-            
-            print(result.stdout)
-            
-            if result.returncode != 0:
-                print(f"❌ Erro ao renderizar {env_name}")
-                if result.stderr:
-                    print(f"Stderr: {result.stderr}")
-                return False
-            
-            # Valida sintaxe YAML de cada arquivo renderizado
-            yaml_files = list(output_dir.glob("*.yaml"))
-            if not yaml_files:
-                print(f"⚠️  Nenhum arquivo YAML gerado para {env_name}")
-                return False
-            
-            print(f"\n📝 Validando sintaxe YAML dos manifests gerados...")
-            all_valid = True
-            for yaml_file in sorted(yaml_files):
-                is_valid, error = validate_yaml_syntax(yaml_file)
-                if is_valid:
-                    print(f"  ✓ {yaml_file.name}")
-                else:
-                    print(f"  ✗ {yaml_file.name}: {error}")
-                    all_valid = False
-            
-            if all_valid:
-                print(f"\n✅ Ambiente {env_name} validado com sucesso!")
-                return True
-            else:
-                print(f"\n❌ Ambiente {env_name} contém erros de sintaxe YAML")
-                return False
-                
-        except Exception as e:
-            print(f"❌ Exceção ao processar {env_name}: {e}")
-            return False
+        if missing:
+            return False, f"Campos obrigatórios ausentes: {', '.join(missing)}"
+        
+        return True, "OK"
+    except Exception as e:
+        return False, str(e)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Valida templates Istio para todos os ambientes"
+        description="Valida manifestos Istio Demo Lab"
     )
     parser.add_argument(
-        "--templates-dir",
-        "-t",
+        "--manifests-dir",
+        "-m",
         type=Path,
-        default=Path("templates"),
-        help="Diretório contendo os templates"
+        default=Path("manifests/demo"),
+        help="Diretório contendo os manifestos"
     )
     
     args = parser.parse_args()
-    templates_dir = args.templates_dir.resolve()
+    manifests_dir = args.manifests_dir.resolve()
     
-    if not templates_dir.exists():
-        print(f"❌ Diretório de templates não encontrado: {templates_dir}")
+    if not manifests_dir.exists():
+        print(f"❌ Diretório de manifestos não encontrado: {manifests_dir}")
         sys.exit(1)
     
     print("=" * 60)
-    print("🚀 Iniciando validação de templates Istio")
+    print("🚀 Iniciando validação de manifestos Istio Demo Lab")
     print("=" * 60)
     
-    # Descobre arquivos de valores
-    values_files = sorted(templates_dir.glob("values*.yaml"))
+    # Descobre arquivos YAML
+    yaml_files = sorted(manifests_dir.glob("*.yaml"))
     
-    if not values_files:
-        print(f"❌ Nenhum arquivo de valores encontrado em {templates_dir}")
+    if not yaml_files:
+        print(f"❌ Nenhum arquivo YAML encontrado em {manifests_dir}")
         sys.exit(1)
     
-    print(f"\n📋 Arquivos de valores encontrados:")
-    for vf in values_files:
-        print(f"  • {vf.name}")
+    print(f"\n📋 Manifestos encontrados: {len(yaml_files)}")
     
-    # Valida cada ambiente
-    results = {}
-    for values_file in values_files:
-        env_name = values_file.stem  # Remove .yaml extension
-        success = render_environment(templates_dir, values_file, env_name)
-        results[env_name] = success
+    # Valida cada arquivo
+    all_passed = True
+    for yaml_file in yaml_files:
+        print(f"\n🔍 Validando: {yaml_file.name}")
+        
+        # Valida sintaxe YAML
+        is_valid, error = validate_yaml_syntax(yaml_file)
+        if not is_valid:
+            print(f"  ❌ Sintaxe YAML inválida: {error}")
+            all_passed = False
+            continue
+        print(f"  ✓ Sintaxe YAML válida")
+        
+        # Valida estrutura Istio/K8s
+        is_valid, error = validate_istio_manifest(yaml_file)
+        if not is_valid:
+            print(f"  ❌ Estrutura inválida: {error}")
+            all_passed = False
+            continue
+        print(f"  ✓ Estrutura válida")
     
     # Resumo final
     print("\n" + "=" * 60)
-    print("📊 RESUMO DA VALIDAÇÃO")
-    print("=" * 60)
-    
-    all_passed = True
-    for env_name, success in results.items():
-        status = "✅ PASSOU" if success else "❌ FALHOU"
-        print(f"  {env_name:20s} {status}")
-        if not success:
-            all_passed = False
-    
-    print("=" * 60)
-    
     if all_passed:
-        print("\n🎉 Todos os ambientes foram validados com sucesso!")
+        print("🎉 Todos os manifestos foram validados com sucesso!")
+        print("=" * 60)
         sys.exit(0)
     else:
-        print("\n❌ Alguns ambientes falharam na validação")
+        print("❌ Alguns manifestos falharam na validação")
+        print("=" * 60)
         sys.exit(1)
 
 

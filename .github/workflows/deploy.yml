@@ -1,25 +1,29 @@
-name: Deploy Istio Templates
+name: Deploy Istio Demo Lab
 
 on:
   push:
     branches: [main]
     paths:
+      - 'manifests/demo/**'
       - 'templates/**'
       - 'scripts/**'
       - '.github/workflows/**'
   pull_request:
     branches: [main]
     paths:
+      - 'manifests/demo/**'
       - 'templates/**'
       - 'scripts/**'
       - '.github/workflows/**'
 
 env:
   PYTHON_VERSION: '3.11'
+  KEYVAULT_NAME: kv-aks-labs-secrets
+  NAMESPACE: pets
 
 jobs:
   validate:
-    name: Validate Templates
+    name: Validate Demo Lab
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -37,97 +41,38 @@ jobs:
           pip install -r requirements.txt
           pip install yamllint
 
-      - name: Lint YAML values files
+      - name: Lint YAML manifests
         run: |
-          echo "🔍 Validando sintaxe YAML dos arquivos de valores..."
-          yamllint templates/values*.yaml
+          echo "🔍 Validando sintaxe YAML dos manifestos demo..."
+          yamllint manifests/demo/*.yaml
 
-      - name: Validate all environments
+      - name: Lint YAML templates
         run: |
-          echo "🧪 Executando validação completa de todos os ambientes..."
-          python scripts/validate_templates.py -t templates
+          echo "🔍 Validando sintaxe YAML dos templates..."
+          yamllint templates/values.yaml
 
-      - name: Test rendering - Default
+      - name: Validate Istio CRDs
         run: |
-          echo "📝 Testando renderização ambiente padrão..."
-          python scripts/helm_render.py -t templates -v templates/values.yaml -o /tmp/manifests/default --strict
-
-      - name: Test rendering - Staging
-        run: |
-          echo "📝 Testando renderização staging..."
-          python scripts/helm_render.py -t templates -v templates/values-staging.yaml -o /tmp/manifests/staging --strict
-
-      - name: Test rendering - Production
-        run: |
-          echo "📝 Testando renderização production..."
-          python scripts/helm_render.py -t templates -v templates/values-production.yaml -o /tmp/manifests/production --strict
+          echo "🧪 Validando CRDs Istio..."
+          for file in manifests/demo/*.yaml; do
+            echo "Validando $file..."
+            python -c "import yaml; yaml.safe_load(open('$file'))"
+          done
 
       - name: Upload validation artifacts
         uses: actions/upload-artifact@v3
         if: always()
         with:
-          name: validation-manifests
-          path: /tmp/manifests/
-          retention-days: 7
-
-  deploy-staging:
-    name: Deploy to Staging
-    runs-on: ubuntu-latest
-    needs: validate
-    if: github.event_name == 'pull_request'
-    environment: staging
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: 'pip'
-
-      - name: Install dependencies
-        run: |
-          pip install --upgrade pip
-          pip install -r requirements.txt
-
-      - name: Render staging manifests
-        run: |
-          echo "🔧 Renderizando manifests para staging..."
-          python scripts/helm_render.py -t templates -v templates/values-staging.yaml -o manifests/staging --strict
-
-      - name: Upload staging manifests
-        uses: actions/upload-artifact@v3
-        with:
-          name: staging-manifests
-          path: manifests/staging/
+          name: demo-manifests
+          path: manifests/demo/
           retention-days: 30
 
-      - name: Setup Azure CLI
-        uses: azure/login@v1
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
-
-      - name: Get AKS credentials
-        run: |
-          az aks get-credentials --resource-group ${{ secrets.AKS_RESOURCE_GROUP }} --name ${{ secrets.AKS_CLUSTER_NAME_STAGING }} --overwrite-existing
-
-      - name: Deploy to AKS Staging
-        run: |
-          echo "🚀 Aplicando manifests no cluster staging..."
-          kubectl apply -f manifests/staging/
-
-      - name: Verify deployment
-        run: |
-          echo "✅ Verificando recursos criados..."
-          kubectl get gateway,virtualservice,destinationrule,peerauthentication -n pets-staging
-
-  deploy-production:
-    name: Deploy to Production
+  deploy-demo:
+    name: Deploy to Demo Environment
     runs-on: ubuntu-latest
     needs: validate
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    environment: production
+    environment: demo
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -143,33 +88,34 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Render production manifests
-        run: |
-          echo "🔧 Renderizando manifests para production..."
-          python scripts/helm_render.py -t templates -v templates/values-production.yaml -o manifests/production --strict
-
-      - name: Upload production manifests
-        uses: actions/upload-artifact@v3
-        with:
-          name: production-manifests
-          path: manifests/production/
-          retention-days: 90
-
       - name: Setup Azure CLI
         uses: azure/login@v1
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
+      - name: Sync TLS secret from Key Vault
+        run: |
+          python scripts/sync_tls_secret.py \
+            --values-file templates/values.yaml \
+            --output-file manifests/demo/00-gateway-tls-secret.yaml \
+            --keyvault-name "$KEYVAULT_NAME"
+
       - name: Get AKS credentials
         run: |
-          az aks get-credentials --resource-group ${{ secrets.AKS_RESOURCE_GROUP }} --name ${{ secrets.AKS_CLUSTER_NAME_PROD }} --overwrite-existing
+          az aks get-credentials --resource-group ${{ secrets.AKS_RESOURCE_GROUP }} --name ${{ secrets.AKS_CLUSTER_NAME }} --overwrite-existing
 
-      - name: Deploy to AKS Production
+      - name: Create namespace and label for Istio injection
         run: |
-          echo "🚀 Aplicando manifests no cluster production..."
-          kubectl apply -f manifests/production/
+          kubectl create namespace ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+          kubectl label namespace ${{ env.NAMESPACE }} istio-injection=enabled --overwrite
+
+      - name: Deploy to AKS Demo
+        run: |
+          echo "🚀 Aplicando manifests no cluster demo..."
+          kubectl apply -f manifests/demo/ -n ${{ env.NAMESPACE }}
 
       - name: Verify deployment
         run: |
           echo "✅ Verificando recursos criados..."
-          kubectl get gateway,virtualservice,destinationrule,peerauthentication -n pets-prod
+          kubectl get gateway -n aks-istio-ingress
+          kubectl get virtualservice,destinationrule,peerauthentication,authorizationpolicy,requestauthentication,serviceentry,sidecar,telemetry,serviceaccount -n ${{ env.NAMESPACE }}
