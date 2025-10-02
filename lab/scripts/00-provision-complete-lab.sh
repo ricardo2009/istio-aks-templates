@@ -269,16 +269,55 @@ EOF
     for key_name in "${private_keys[@]}"; do
         log_info "Gerando chave privada: $key_name"
         
-        # Gerar chave privada (simulada para o laboratório)
-        openssl genrsa -out "/tmp/$key_name.pem" 2048
+        # Verificar se openssl está disponível
+        if ! command -v openssl >/dev/null 2>&1; then
+            log_error "OpenSSL não encontrado. Instale com: sudo apt-get install -y openssl"
+            exit 1
+        fi
         
-        az keyvault secret set \
+        # Verificar permissões de escrita no /tmp
+        if [ ! -w "/tmp" ]; then
+            log_error "Sem permissão de escrita em /tmp"
+            exit 1
+        fi
+        
+        # Gerar chave privada com verificação de erro
+        local key_file="/tmp/$key_name.pem"
+        log_info "Executando: openssl genrsa -out $key_file 2048"
+        
+        if ! openssl genrsa -out "$key_file" 2048; then
+            log_error "Falha ao gerar chave privada com openssl"
+            exit 1
+        fi
+        
+        # Verificar se o arquivo foi criado
+        if [ ! -f "$key_file" ]; then
+            log_error "Arquivo de chave privada não foi criado: $key_file"
+            exit 1
+        fi
+        
+        # Verificar se o arquivo não está vazio
+        if [ ! -s "$key_file" ]; then
+            log_error "Arquivo de chave privada está vazio: $key_file"
+            exit 1
+        fi
+        
+        log_success "Chave privada gerada: $key_file ($(wc -c < "$key_file") bytes)"
+        
+        # Enviar para Key Vault
+        log_info "Enviando chave para Key Vault: $key_name"
+        if ! az keyvault secret set \
             --vault-name "$KEY_VAULT_NAME" \
             --name "$key_name" \
-            --file "/tmp/$key_name.pem" \
-            --tags "environment=lab" "component=istio" "type=private-key"
+            --file "$key_file" \
+            --tags "environment=lab" "component=istio" "type=private-key"; then
+            log_error "Falha ao enviar chave para Key Vault: $key_name"
+            exit 1
+        fi
         
-        rm -f "/tmp/$key_name.pem"
+        # Limpar arquivo local
+        rm -f "$key_file"
+        log_success "Chave privada $key_name enviada para Key Vault com sucesso"
     done
     
     # Limpar arquivos temporários

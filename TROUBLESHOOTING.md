@@ -65,6 +65,42 @@ KEY_VAULT_NAME="kvistio$(date +%s | tail -c 6)"  # 12 chars
 
 ---
 
+## ❌ Erro: "No such file or directory: '/tmp/istio-root-ca-key.pem'"
+
+### **Problema**
+```
+[Errno 2] No such file or directory: '/tmp/istio-root-ca-key.pem'
+```
+
+### **Causa**
+O comando `openssl genrsa` falhou silenciosamente ou não tem permissões para criar o arquivo.
+
+### **✅ Solução**
+Este erro foi **corrigido** na versão mais recente do script com verificações robustas:
+
+**🔍 Verificações Adicionadas:**
+- ✅ Verifica se OpenSSL está instalado
+- ✅ Verifica permissões de escrita em `/tmp`
+- ✅ Mostra comando sendo executado (debug)
+- ✅ Verifica se comando falhou
+- ✅ Verifica se arquivo foi criado e não está vazio
+- ✅ Mostra tamanho do arquivo gerado
+
+**🛠️ Instalação Manual do OpenSSL:**
+```bash
+sudo apt-get update
+sudo apt-get install -y openssl
+```
+
+**🧪 Teste Manual:**
+```bash
+openssl genrsa -out "/tmp/test-key.pem" 2048
+ls -la /tmp/test-key.pem
+rm -f /tmp/test-key.pem
+```
+
+---
+
 ## ❌ Erro: "command not found"
 
 ### **Dependências Necessárias**
