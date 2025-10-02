@@ -254,7 +254,7 @@ EOF
         az keyvault certificate create \
             --vault-name "$KEY_VAULT_NAME" \
             --name "$cert_name" \
-            --policy @"$policy_file" \
+            --policy "$(cat "$policy_file")" \
             --tags "environment=lab" "component=istio" "type=certificate"
     done
     
