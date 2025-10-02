@@ -9,7 +9,7 @@ metadata:
   name: autonomous-deployment-controller
   namespace: ecommerce
   annotations:
-    azure.workload.identity/client-id: "bb64500b-c834-425a-a694-564ab3153045"
+    azure.workload.identity/client-id: "${AZURE_CLIENT_ID}"
 ---
 # 🔐 ClusterRole com permissões necessárias
 apiVersion: rbac.authorization.k8s.io/v1
@@ -178,7 +178,7 @@ spec:
           name: http-health
         env:
         - name: AZURE_CLIENT_ID
-          value: "bb64500b-c834-425a-a694-564ab3153045"
+          value: "${AZURE_CLIENT_ID}"
         - name: AZURE_TENANT_ID
           value: "16b3c013-d300-468d-ac64-7eda0820b6d3"
         - name: AZURE_SUBSCRIPTION_ID
