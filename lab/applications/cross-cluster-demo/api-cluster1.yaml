@@ -1,0 +1,388 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cross-cluster-demo
+  labels:
+    istio-injection: enabled
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-cluster1
+  namespace: cross-cluster-demo
+  labels:
+    app: api-cluster1
+    version: v1
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: api-cluster1
+      version: v1
+  template:
+    metadata:
+      labels:
+        app: api-cluster1
+        version: v1
+    spec:
+      containers:
+      - name: api
+        image: node:18-alpine
+        ports:
+        - containerPort: 3000
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: CLUSTER_NAME
+          value: "primary"
+        - name: SERVICE_VERSION
+          value: "v1"
+        - name: CROSS_CLUSTER_API_URL
+          value: "http://api-cluster2.cross-cluster-demo.svc.cluster.local:3000"
+        command: ["/bin/sh"]
+        args:
+        - -c
+        - |
+          cat > /app/server.js << 'EOF'
+          const http = require('http');
+          const url = require('url');
+          
+          const CLUSTER_NAME = process.env.CLUSTER_NAME || 'unknown';
+          const SERVICE_VERSION = process.env.SERVICE_VERSION || 'v1';
+          const CROSS_CLUSTER_URL = process.env.CROSS_CLUSTER_API_URL;
+          
+          // Função para fazer requisição HTTP
+          function makeRequest(targetUrl, timeout = 5000) {
+            return new Promise((resolve, reject) => {
+              const startTime = Date.now();
+              const parsedUrl = url.parse(targetUrl);
+              
+              const options = {
+                hostname: parsedUrl.hostname,
+                port: parsedUrl.port || 3000,
+                path: parsedUrl.path || '/',
+                method: 'GET',
+                timeout: timeout,
+                headers: {
+                  'User-Agent': 'Cross-Cluster-Demo/1.0',
+                  'X-Source-Cluster': CLUSTER_NAME,
+                  'X-Request-ID': Math.random().toString(36).substring(7)
+                }
+              };
+              
+              const req = http.request(options, (res) => {
+                let data = '';
+                res.on('data', (chunk) => data += chunk);
+                res.on('end', () => {
+                  const endTime = Date.now();
+                  const responseTime = endTime - startTime;
+                  
+                  try {
+                    const jsonData = JSON.parse(data);
+                    resolve({
+                      success: true,
+                      responseTime: responseTime,
+                      statusCode: res.statusCode,
+                      data: jsonData,
+                      headers: res.headers
+                    });
+                  } catch (e) {
+                    resolve({
+                      success: true,
+                      responseTime: responseTime,
+                      statusCode: res.statusCode,
+                      data: data,
+                      headers: res.headers
+                    });
+                  }
+                });
+              });
+              
+              req.on('error', (err) => {
+                const endTime = Date.now();
+                const responseTime = endTime - startTime;
+                resolve({
+                  success: false,
+                  responseTime: responseTime,
+                  error: err.message,
+                  statusCode: 0
+                });
+              });
+              
+              req.on('timeout', () => {
+                req.destroy();
+                const endTime = Date.now();
+                const responseTime = endTime - startTime;
+                resolve({
+                  success: false,
+                  responseTime: responseTime,
+                  error: 'Request timeout',
+                  statusCode: 408
+                });
+              });
+              
+              req.end();
+            });
+          }
+          
+          // Função para obter informações do sistema
+          function getSystemInfo() {
+            const os = require('os');
+            return {
+              hostname: os.hostname(),
+              platform: os.platform(),
+              arch: os.arch(),
+              cpus: os.cpus().length,
+              memory: {
+                total: Math.round(os.totalmem() / 1024 / 1024),
+                free: Math.round(os.freemem() / 1024 / 1024)
+              },
+              uptime: os.uptime(),
+              loadavg: os.loadavg()
+            };
+          }
+          
+          const server = http.createServer(async (req, res) => {
+            const startTime = Date.now();
+            const requestId = req.headers['x-request-id'] || Math.random().toString(36).substring(7);
+            
+            // CORS headers
+            res.setHeader('Access-Control-Allow-Origin', '*');
+            res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+            res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Request-ID, X-Source-Cluster');
+            res.setHeader('Content-Type', 'application/json');
+            res.setHeader('X-Response-From', CLUSTER_NAME);
+            res.setHeader('X-Service-Version', SERVICE_VERSION);
+            res.setHeader('X-Request-ID', requestId);
+            
+            if (req.method === 'OPTIONS') {
+              res.writeHead(200);
+              res.end();
+              return;
+            }
+            
+            const parsedUrl = url.parse(req.url, true);
+            const pathname = parsedUrl.pathname;
+            
+            console.log(`[${new Date().toISOString()}] ${req.method} ${pathname} - Request ID: ${requestId}`);
+            
+            try {
+              if (pathname === '/health') {
+                const response = {
+                  status: 'healthy',
+                  cluster: CLUSTER_NAME,
+                  version: SERVICE_VERSION,
+                  timestamp: new Date().toISOString(),
+                  requestId: requestId,
+                  responseTime: Date.now() - startTime
+                };
+                res.writeHead(200);
+                res.end(JSON.stringify(response, null, 2));
+                
+              } else if (pathname === '/info') {
+                const response = {
+                  cluster: CLUSTER_NAME,
+                  version: SERVICE_VERSION,
+                  timestamp: new Date().toISOString(),
+                  requestId: requestId,
+                  system: getSystemInfo(),
+                  responseTime: Date.now() - startTime
+                };
+                res.writeHead(200);
+                res.end(JSON.stringify(response, null, 2));
+                
+              } else if (pathname === '/cross-cluster-test') {
+                console.log(`[${new Date().toISOString()}] Iniciando teste cross-cluster...`);
+                
+                const testResults = [];
+                const iterations = parseInt(parsedUrl.query.iterations) || 5;
+                
+                for (let i = 0; i < iterations; i++) {
+                  console.log(`[${new Date().toISOString()}] Teste ${i + 1}/${iterations}...`);
+                  const result = await makeRequest(`${CROSS_CLUSTER_URL}/health`);
+                  testResults.push({
+                    iteration: i + 1,
+                    ...result,
+                    timestamp: new Date().toISOString()
+                  });
+                  
+                  // Pequena pausa entre requisições
+                  if (i < iterations - 1) {
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                  }
+                }
+                
+                const totalTime = testResults.reduce((sum, result) => sum + result.responseTime, 0);
+                const avgTime = totalTime / testResults.length;
+                const successCount = testResults.filter(r => r.success).length;
+                const successRate = (successCount / testResults.length) * 100;
+                
+                const response = {
+                  cluster: CLUSTER_NAME,
+                  version: SERVICE_VERSION,
+                  timestamp: new Date().toISOString(),
+                  requestId: requestId,
+                  crossClusterTest: {
+                    targetUrl: `${CROSS_CLUSTER_URL}/health`,
+                    iterations: iterations,
+                    results: testResults,
+                    summary: {
+                      totalRequests: testResults.length,
+                      successfulRequests: successCount,
+                      failedRequests: testResults.length - successCount,
+                      successRate: `${successRate.toFixed(2)}%`,
+                      averageResponseTime: `${avgTime.toFixed(2)}ms`,
+                      minResponseTime: `${Math.min(...testResults.map(r => r.responseTime))}ms`,
+                      maxResponseTime: `${Math.max(...testResults.map(r => r.responseTime))}ms`,
+                      totalTestTime: `${Date.now() - startTime}ms`
+                    }
+                  }
+                };
+                
+                console.log(`[${new Date().toISOString()}] Teste cross-cluster concluído: ${successRate.toFixed(2)}% sucesso, ${avgTime.toFixed(2)}ms média`);
+                
+                res.writeHead(200);
+                res.end(JSON.stringify(response, null, 2));
+                
+              } else if (pathname === '/load-test') {
+                const concurrent = parseInt(parsedUrl.query.concurrent) || 10;
+                const requests = parseInt(parsedUrl.query.requests) || 50;
+                
+                console.log(`[${new Date().toISOString()}] Iniciando teste de carga: ${requests} requisições, ${concurrent} concorrentes`);
+                
+                const results = [];
+                const batches = Math.ceil(requests / concurrent);
+                
+                for (let batch = 0; batch < batches; batch++) {
+                  const batchPromises = [];
+                  const batchSize = Math.min(concurrent, requests - (batch * concurrent));
+                  
+                  for (let i = 0; i < batchSize; i++) {
+                    batchPromises.push(makeRequest(`${CROSS_CLUSTER_URL}/health`));
+                  }
+                  
+                  const batchResults = await Promise.all(batchPromises);
+                  results.push(...batchResults.map((result, index) => ({
+                    requestNumber: (batch * concurrent) + index + 1,
+                    batch: batch + 1,
+                    ...result,
+                    timestamp: new Date().toISOString()
+                  })));
+                  
+                  console.log(`[${new Date().toISOString()}] Batch ${batch + 1}/${batches} concluído`);
+                }
+                
+                const totalTime = results.reduce((sum, result) => sum + result.responseTime, 0);
+                const avgTime = totalTime / results.length;
+                const successCount = results.filter(r => r.success).length;
+                const successRate = (successCount / results.length) * 100;
+                
+                const response = {
+                  cluster: CLUSTER_NAME,
+                  version: SERVICE_VERSION,
+                  timestamp: new Date().toISOString(),
+                  requestId: requestId,
+                  loadTest: {
+                    configuration: {
+                      totalRequests: requests,
+                      concurrentRequests: concurrent,
+                      batches: batches
+                    },
+                    results: results,
+                    summary: {
+                      totalRequests: results.length,
+                      successfulRequests: successCount,
+                      failedRequests: results.length - successCount,
+                      successRate: `${successRate.toFixed(2)}%`,
+                      averageResponseTime: `${avgTime.toFixed(2)}ms`,
+                      minResponseTime: `${Math.min(...results.map(r => r.responseTime))}ms`,
+                      maxResponseTime: `${Math.max(...results.map(r => r.responseTime))}ms`,
+                      totalTestTime: `${Date.now() - startTime}ms`,
+                      requestsPerSecond: ((results.length / (Date.now() - startTime)) * 1000).toFixed(2)
+                    }
+                  }
+                };
+                
+                console.log(`[${new Date().toISOString()}] Teste de carga concluído: ${successRate.toFixed(2)}% sucesso, ${avgTime.toFixed(2)}ms média`);
+                
+                res.writeHead(200);
+                res.end(JSON.stringify(response, null, 2));
+                
+              } else {
+                const response = {
+                  error: 'Not Found',
+                  cluster: CLUSTER_NAME,
+                  version: SERVICE_VERSION,
+                  timestamp: new Date().toISOString(),
+                  requestId: requestId,
+                  availableEndpoints: [
+                    '/health',
+                    '/info',
+                    '/cross-cluster-test?iterations=5',
+                    '/load-test?concurrent=10&requests=50'
+                  ],
+                  responseTime: Date.now() - startTime
+                };
+                res.writeHead(404);
+                res.end(JSON.stringify(response, null, 2));
+              }
+              
+            } catch (error) {
+              console.error(`[${new Date().toISOString()}] Erro: ${error.message}`);
+              const response = {
+                error: 'Internal Server Error',
+                message: error.message,
+                cluster: CLUSTER_NAME,
+                version: SERVICE_VERSION,
+                timestamp: new Date().toISOString(),
+                requestId: requestId,
+                responseTime: Date.now() - startTime
+              };
+              res.writeHead(500);
+              res.end(JSON.stringify(response, null, 2));
+            }
+          });
+          
+          const PORT = 3000;
+          server.listen(PORT, '0.0.0.0', () => {
+            console.log(`[${new Date().toISOString()}] API Cluster 1 rodando na porta ${PORT}`);
+            console.log(`[${new Date().toISOString()}] Cluster: ${CLUSTER_NAME}, Versão: ${SERVICE_VERSION}`);
+            console.log(`[${new Date().toISOString()}] Cross-cluster URL: ${CROSS_CLUSTER_URL}`);
+          });
+          EOF
+          
+          cd /app && node server.js
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-cluster1
+  namespace: cross-cluster-demo
+  labels:
+    app: api-cluster1
+spec:
+  ports:
+  - port: 3000
+    targetPort: 3000
+    name: http
+  selector:
+    app: api-cluster1

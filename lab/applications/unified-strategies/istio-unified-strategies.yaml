@@ -1,0 +1,360 @@
+# 🚀 CONFIGURAÇÃO ISTIO UNIFICADA - TODAS AS ESTRATÉGIAS SIMULTANEAMENTE
+# Esta configuração aplica A/B Testing + Blue/Green + Canary + Shadow Testing
+# na MESMA aplicação e-commerce, demonstrando expertise máxima
+
+# Gateway principal
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: ecommerce-gateway
+  namespace: ecommerce-unified
+spec:
+  selector:
+    istio: aks-istio-ingressgateway-external
+  servers:
+  - port:
+      number: 80
+      name: http
+      protocol: HTTP
+    hosts:
+    - "*"
+---
+# VirtualService UNIFICADO - Implementa TODAS as estratégias simultaneamente
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: ecommerce-unified-routing
+  namespace: ecommerce-unified
+  annotations:
+    description: "Roteamento unificado implementando A/B + Blue/Green + Canary + Shadow simultaneamente"
+spec:
+  hosts:
+  - "*"
+  gateways:
+  - ecommerce-gateway
+  http:
+  # 1. SHADOW TESTING - 100% do tráfego é espelhado para v3 (não afeta usuários)
+  - match:
+    - headers:
+        x-shadow-test:
+          exact: "enabled"
+    mirror:
+      host: ecommerce-app
+      subset: v3-shadow
+    mirrorPercentage:
+      value: 100
+    route:
+    - destination:
+        host: ecommerce-app
+        subset: v1-stable
+      weight: 100
+  
+  # 2. A/B TESTING - Usuários premium vão para v2 (Green Environment)
+  - match:
+    - headers:
+        x-user-type:
+          exact: "premium"
+    route:
+    - destination:
+        host: ecommerce-app
+        subset: v2-green-premium
+      weight: 100
+    mirror:
+      host: ecommerce-app
+      subset: v3-shadow
+    mirrorPercentage:
+      value: 100
+  
+  # 3. CANARY DEPLOYMENT - 15% do tráfego regular vai para v2 (canary)
+  - match:
+    - headers:
+        x-user-type:
+          exact: "regular"
+    route:
+    - destination:
+        host: ecommerce-app
+        subset: v1-stable
+      weight: 85  # 85% para versão estável
+    - destination:
+        host: ecommerce-app
+        subset: v2-canary
+      weight: 15  # 15% para canary
+    mirror:
+      host: ecommerce-app
+      subset: v3-shadow
+    mirrorPercentage:
+      value: 100
+  
+  # 4. BLUE/GREEN + GEOGRAPHIC ROUTING
+  - match:
+    - headers:
+        x-user-location:
+          exact: "eu"
+    route:
+    - destination:
+        host: ecommerce-app
+        subset: v2-green-premium  # Europa usa Green environment
+      weight: 100
+    mirror:
+      host: ecommerce-app
+      subset: v3-shadow
+    mirrorPercentage:
+      value: 50
+  
+  # 5. DEVICE-BASED ROUTING (Mobile users get v2)
+  - match:
+    - headers:
+        x-device-type:
+          exact: "mobile"
+    route:
+    - destination:
+        host: ecommerce-app
+        subset: v2-green-premium
+      weight: 70
+    - destination:
+        host: ecommerce-app
+        subset: v1-stable
+      weight: 30
+    mirror:
+      host: ecommerce-app
+      subset: v3-shadow
+    mirrorPercentage:
+      value: 100
+  
+  # 6. TIME-BASED ROUTING (Peak hours get more canary traffic)
+  - match:
+    - headers:
+        x-time-slot:
+          exact: "peak"
+    route:
+    - destination:
+        host: ecommerce-app
+        subset: v1-stable
+      weight: 70
+    - destination:
+        host: ecommerce-app
+        subset: v2-canary
+      weight: 30  # Mais tráfego canary em horários de pico
+    mirror:
+      host: ecommerce-app
+      subset: v3-shadow
+    mirrorPercentage:
+      value: 100
+  
+  # 7. DEFAULT ROUTING - Implementa todas as estratégias para tráfego geral
+  - route:
+    - destination:
+        host: ecommerce-app
+        subset: v1-stable
+      weight: 80  # Blue environment (stable)
+    - destination:
+        host: ecommerce-app
+        subset: v2-canary
+      weight: 20  # Green environment (canary)
+    mirror:
+      host: ecommerce-app
+      subset: v3-shadow
+    mirrorPercentage:
+      value: 100  # 100% shadow testing
+    fault:
+      delay:
+        percentage:
+          value: 1  # 1% das requisições têm delay para teste de resiliência
+        fixedDelay: 2s
+      abort:
+        percentage:
+          value: 0.5  # 0.5% das requisições falham para teste de circuit breaker
+        httpStatus: 503
+---
+# DestinationRule UNIFICADO - Define todos os subsets para as estratégias
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: ecommerce-unified-destination
+  namespace: ecommerce-unified
+  annotations:
+    description: "DestinationRule unificado suportando todas as estratégias de deployment"
+spec:
+  host: ecommerce-app
+  trafficPolicy:
+    # Circuit Breaker global
+    outlierDetection:
+      consecutiveGatewayErrors: 3
+      consecutive5xxErrors: 3
+      interval: 30s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+      minHealthPercent: 30
+    # Connection pooling
+    connectionPool:
+      tcp:
+        maxConnections: 100
+        connectTimeout: 10s
+        tcpKeepalive:
+          time: 7200s
+          interval: 75s
+      http:
+        http1MaxPendingRequests: 50
+        http2MaxRequests: 100
+        maxRequestsPerConnection: 10
+        maxRetries: 3
+        consecutiveGatewayErrors: 3
+        interval: 30s
+        baseEjectionTime: 30s
+    # Load balancing
+    loadBalancer:
+      simple: LEAST_CONN
+  subsets:
+  # BLUE ENVIRONMENT - Versão estável v1
+  - name: v1-stable
+    labels:
+      version: v1
+      environment: blue
+      strategy: stable
+    trafficPolicy:
+      outlierDetection:
+        consecutiveGatewayErrors: 5
+        consecutive5xxErrors: 5
+        interval: 60s
+        baseEjectionTime: 60s
+  
+  # GREEN ENVIRONMENT - Versão v2 para usuários premium (A/B Testing)
+  - name: v2-green-premium
+    labels:
+      version: v2
+      environment: green
+      segment: premium
+    trafficPolicy:
+      outlierDetection:
+        consecutiveGatewayErrors: 2
+        consecutive5xxErrors: 2
+        interval: 15s
+        baseEjectionTime: 15s
+  
+  # CANARY - Versão v2 para rollout gradual
+  - name: v2-canary
+    labels:
+      version: v2
+      strategy: canary
+    trafficPolicy:
+      outlierDetection:
+        consecutiveGatewayErrors: 1  # Mais rigoroso para canary
+        consecutive5xxErrors: 1
+        interval: 10s
+        baseEjectionTime: 10s
+        maxEjectionPercent: 100  # Pode ejetar todos os pods canary se necessário
+  
+  # SHADOW - Versão v3 para testes não-intrusivos
+  - name: v3-shadow
+    labels:
+      version: v3
+      strategy: shadow
+    trafficPolicy:
+      outlierDetection:
+        consecutiveGatewayErrors: 10  # Mais tolerante para shadow
+        consecutive5xxErrors: 10
+        interval: 120s
+        baseEjectionTime: 120s
+---
+# PeerAuthentication - mTLS STRICT para máxima segurança
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: ecommerce-mtls-strict
+  namespace: ecommerce-unified
+spec:
+  mtls:
+    mode: STRICT
+---
+# AuthorizationPolicy - Controle granular de acesso
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: ecommerce-access-control
+  namespace: ecommerce-unified
+spec:
+  selector:
+    matchLabels:
+      app: ecommerce-app
+  rules:
+  # Permitir acesso geral aos endpoints públicos
+  - to:
+    - operation:
+        methods: ["GET"]
+        paths: ["/", "/health", "/products"]
+  
+  # Checkout apenas para usuários autenticados
+  - to:
+    - operation:
+        methods: ["POST", "GET"]
+        paths: ["/checkout"]
+    when:
+    - key: request.headers[x-user-type]
+      values: ["regular", "premium", "vip"]
+  
+  # Endpoints administrativos apenas para usuários premium
+  - to:
+    - operation:
+        methods: ["GET", "POST"]
+        paths: ["/admin/*"]
+    when:
+    - key: request.headers[x-user-type]
+      values: ["premium", "vip"]
+  
+  # Shadow testing não deve ser acessível diretamente
+  - from:
+    - source:
+        principals: ["cluster.local/ns/ecommerce-unified/sa/default"]
+    to:
+    - operation:
+        methods: ["GET", "POST"]
+    when:
+    - key: destination.labels[strategy]
+      values: ["shadow"]
+---
+# Telemetry v2 - Observabilidade avançada
+apiVersion: telemetry.istio.io/v1alpha1
+kind: Telemetry
+metadata:
+  name: ecommerce-observability
+  namespace: ecommerce-unified
+spec:
+  metrics:
+  - providers:
+    - name: prometheus
+  - overrides:
+    - match:
+        metric: ALL_METRICS
+      tagOverrides:
+        app_version:
+          value: "%{ENVIRONMENT_VARIABLE:APP_VERSION}"
+        deployment_strategy:
+          value: "%{ENVIRONMENT_VARIABLE:DEPLOYMENT_STRATEGY}"
+        environment_color:
+          value: "%{ENVIRONMENT_VARIABLE:ENVIRONMENT_COLOR}"
+        user_segment:
+          value: "%{ENVIRONMENT_VARIABLE:USER_SEGMENT}"
+  accessLogging:
+  - providers:
+    - name: otel
+  tracing:
+  - providers:
+    - name: jaeger
+---
+# ServiceMonitor para Prometheus gerenciado
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: ecommerce-metrics
+  namespace: ecommerce-unified
+  labels:
+    app: ecommerce-app
+spec:
+  selector:
+    matchLabels:
+      app: ecommerce-app
+  endpoints:
+  - port: http
+    interval: 15s
+    path: /metrics
+    honorLabels: true

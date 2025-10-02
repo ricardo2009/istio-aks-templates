@@ -1,0 +1,572 @@
+# 🤖 Controlador Autônomo de Deployment com Rollback Automático
+# Funciona com Prometheus Gerenciado e Istio Gerenciado no AKS
+
+---
+# 🏗️ ServiceAccount para o Controlador
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: autonomous-deployment-controller
+  namespace: ecommerce
+  annotations:
+    azure.workload.identity/client-id: "bb64500b-c834-425a-a694-564ab3153045"
+---
+# 🔐 ClusterRole com permissões necessárias
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: autonomous-deployment-controller
+rules:
+- apiGroups: [""]
+  resources: ["services", "endpoints", "pods"]
+  verbs: ["get", "list", "watch", "update", "patch"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "replicasets"]
+  verbs: ["get", "list", "watch", "update", "patch"]
+- apiGroups: ["networking.istio.io"]
+  resources: ["virtualservices", "destinationrules", "gateways"]
+  verbs: ["get", "list", "watch", "update", "patch", "create", "delete"]
+- apiGroups: ["security.istio.io"]
+  resources: ["authorizationpolicies", "peerauthentications"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["telemetry.istio.io"]
+  resources: ["telemetries"]
+  verbs: ["get", "list", "watch", "update", "patch"]
+- apiGroups: [""]
+  resources: ["configmaps", "secrets"]
+  verbs: ["get", "list", "watch", "update", "patch", "create"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "patch"]
+
+---
+# 🔗 ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: autonomous-deployment-controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: autonomous-deployment-controller
+subjects:
+- kind: ServiceAccount
+  name: autonomous-deployment-controller
+  namespace: ecommerce
+
+---
+# ⚙️ ConfigMap com configurações do controlador
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: autonomous-controller-config
+  namespace: ecommerce
+data:
+  config.yaml: |
+    # 🎯 SLO/SLI Thresholds para Rollback Automático
+    slos:
+      # 📊 Success Rate SLO
+      success_rate:
+        threshold: 99.5  # 99.5% success rate mínimo
+        measurement_window: "5m"
+        evaluation_interval: "30s"
+        consecutive_failures: 3
+        
+      # ⚡ Latency SLO  
+      latency_p95:
+        threshold: 500   # 500ms P95 máximo
+        measurement_window: "5m"
+        evaluation_interval: "30s"
+        consecutive_failures: 3
+        
+      # 🚨 Error Rate SLO
+      error_rate:
+        threshold: 0.5   # 0.5% error rate máximo
+        measurement_window: "5m"
+        evaluation_interval: "30s"
+        consecutive_failures: 2
+        
+      # 💾 Resource Usage SLO
+      cpu_usage:
+        threshold: 80    # 80% CPU máximo
+        measurement_window: "5m"
+        evaluation_interval: "30s"
+        consecutive_failures: 3
+        
+      memory_usage:
+        threshold: 85    # 85% Memory máximo
+        measurement_window: "5m"
+        evaluation_interval: "30s"
+        consecutive_failures: 3
+
+    # 🔄 Deployment Strategy Configuration
+    strategies:
+      canary:
+        initial_weight: 5
+        increment: 5
+        max_weight: 50
+        promotion_interval: "10m"
+        success_criteria:
+          success_rate: 99.0
+          latency_p95: 600
+          error_rate: 1.0
+          
+      blue_green:
+        switch_threshold: 95  # % de confiança para switch
+        validation_period: "15m"
+        success_criteria:
+          success_rate: 99.5
+          latency_p95: 500
+          error_rate: 0.5
+          
+      ab_test:
+        duration: "24h"
+        traffic_split: 50  # 50/50 split
+        statistical_significance: 95
+        success_criteria:
+          conversion_rate_improvement: 2.0  # 2% improvement minimum
+
+    # 🌐 Cross-Cluster Configuration
+    cross_cluster:
+      primary_cluster: "aks-labs"
+      secondary_cluster: "aks-labs-secondary"
+      failover_threshold: 3  # consecutive failures
+      failback_threshold: 10 # consecutive successes
+      health_check_interval: "30s"
+
+    # 📊 Azure Monitor Integration
+    azure_monitor:
+      workspace_id: "${AZURE_MONITOR_WORKSPACE_ID}"
+      prometheus_endpoint: "${PROMETHEUS_ENDPOINT}"
+      query_timeout: "30s"
+      retry_attempts: 3
+
+---
+# 🤖 Deployment do Controlador Autônomo
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: autonomous-deployment-controller
+  namespace: ecommerce
+  labels:
+    app: autonomous-deployment-controller
+    version: v1.0.0
+spec:
+  replicas: 2  # HA para o controlador
+  selector:
+    matchLabels:
+      app: autonomous-deployment-controller
+  template:
+    metadata:
+      labels:
+        app: autonomous-deployment-controller
+        version: v1.0.0
+      annotations:
+        sidecar.istio.io/inject: "true"
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: autonomous-deployment-controller
+      containers:
+      - name: controller
+        image: acrlabs.azurecr.io/autonomous-deployment-controller:v1.0.0
+        ports:
+        - containerPort: 8080
+          name: http-metrics
+        - containerPort: 8081
+          name: http-health
+        env:
+        - name: AZURE_CLIENT_ID
+          value: "bb64500b-c834-425a-a694-564ab3153045"
+        - name: AZURE_TENANT_ID
+          value: "16b3c013-d300-468d-ac64-7eda0820b6d3"
+        - name: AZURE_SUBSCRIPTION_ID
+          value: "f7963a09-275a-4fc0-aa3f-805aa89eb2b7"
+        - name: AZURE_MONITOR_WORKSPACE_ID
+          valueFrom:
+            secretKeyRef:
+              name: azure-monitor-config
+              key: workspace-id
+        - name: PROMETHEUS_ENDPOINT
+          valueFrom:
+            secretKeyRef:
+              name: azure-monitor-config
+              key: prometheus-endpoint
+        - name: CLUSTER_NAME
+          value: "aks-labs"
+        - name: NAMESPACE
+          value: "ecommerce"
+        - name: LOG_LEVEL
+          value: "info"
+        - name: CONTROLLER_CONFIG_PATH
+          value: "/etc/config/config.yaml"
+        volumeMounts:
+        - name: config
+          mountPath: /etc/config
+          readOnly: true
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health/live
+            port: 8081
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health/ready
+            port: 8081
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1001
+          capabilities:
+            drop:
+            - ALL
+      volumes:
+      - name: config
+        configMap:
+          name: autonomous-controller-config
+      securityContext:
+        fsGroup: 1001
+
+---
+# 🔍 Service para o Controlador
+apiVersion: v1
+kind: Service
+metadata:
+  name: autonomous-deployment-controller
+  namespace: ecommerce
+  labels:
+    app: autonomous-deployment-controller
+spec:
+  selector:
+    app: autonomous-deployment-controller
+  ports:
+  - name: http-metrics
+    port: 8080
+    targetPort: 8080
+  - name: http-health
+    port: 8081
+    targetPort: 8081
+
+---
+# 📊 ServiceMonitor para Prometheus Gerenciado
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: autonomous-deployment-controller
+  namespace: ecommerce
+  labels:
+    app: autonomous-deployment-controller
+spec:
+  selector:
+    matchLabels:
+      app: autonomous-deployment-controller
+  endpoints:
+  - port: http-metrics
+    interval: 30s
+    path: /metrics
+    honorLabels: true
+
+---
+# 🚨 PrometheusRule para Alertas Automáticos
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: autonomous-deployment-alerts
+  namespace: ecommerce
+  labels:
+    app: autonomous-deployment-controller
+spec:
+  groups:
+  - name: deployment.slo.violations
+    interval: 30s
+    rules:
+    
+    # 📉 Success Rate SLO Violation
+    - alert: DeploymentSuccessRateSLOViolation
+      expr: |
+        (
+          sum(rate(istio_requests_total{destination_service_name="ecommerce-app",response_code!~"5.*"}[5m])) /
+          sum(rate(istio_requests_total{destination_service_name="ecommerce-app"}[5m]))
+        ) * 100 < 99.5
+      for: 2m
+      labels:
+        severity: critical
+        deployment_strategy: "{{ $labels.deployment_strategy }}"
+        action: "rollback"
+      annotations:
+        summary: "Deployment success rate SLO violation"
+        description: "Success rate is {{ $value }}% which is below the 99.5% SLO threshold"
+        
+    # ⚡ Latency SLO Violation  
+    - alert: DeploymentLatencySLOViolation
+      expr: |
+        histogram_quantile(0.95,
+          sum(rate(istio_request_duration_milliseconds_bucket{destination_service_name="ecommerce-app"}[5m])) by (le)
+        ) > 500
+      for: 2m
+      labels:
+        severity: critical
+        deployment_strategy: "{{ $labels.deployment_strategy }}"
+        action: "rollback"
+      annotations:
+        summary: "Deployment latency SLO violation"
+        description: "P95 latency is {{ $value }}ms which is above the 500ms SLO threshold"
+        
+    # 🚨 Error Rate SLO Violation
+    - alert: DeploymentErrorRateSLOViolation
+      expr: |
+        (
+          sum(rate(istio_requests_total{destination_service_name="ecommerce-app",response_code=~"5.*"}[5m])) /
+          sum(rate(istio_requests_total{destination_service_name="ecommerce-app"}[5m]))
+        ) * 100 > 0.5
+      for: 1m
+      labels:
+        severity: critical
+        deployment_strategy: "{{ $labels.deployment_strategy }}"
+        action: "rollback"
+      annotations:
+        summary: "Deployment error rate SLO violation"
+        description: "Error rate is {{ $value }}% which is above the 0.5% SLO threshold"
+        
+    # 💾 Resource Usage SLO Violation
+    - alert: DeploymentResourceSLOViolation
+      expr: |
+        (
+          sum(container_cpu_usage_seconds_total{pod=~"ecommerce-app-.*"}) /
+          sum(container_spec_cpu_quota{pod=~"ecommerce-app-.*"} / container_spec_cpu_period{pod=~"ecommerce-app-.*"})
+        ) * 100 > 80
+      for: 3m
+      labels:
+        severity: warning
+        deployment_strategy: "{{ $labels.deployment_strategy }}"
+        action: "scale_down"
+      annotations:
+        summary: "Deployment resource usage SLO violation"
+        description: "CPU usage is {{ $value }}% which is above the 80% SLO threshold"
+
+    # 🌐 Cross-Cluster Health
+    - alert: CrossClusterCommunicationFailure
+      expr: |
+        sum(rate(istio_requests_total{source_cluster!="unknown",destination_cluster!="unknown",response_code=~"5.*"}[5m])) /
+        sum(rate(istio_requests_total{source_cluster!="unknown",destination_cluster!="unknown"}[5m])) > 0.05
+      for: 2m
+      labels:
+        severity: critical
+        action: "failover"
+      annotations:
+        summary: "Cross-cluster communication failure"
+        description: "Cross-cluster error rate is {{ $value }} which indicates connectivity issues"
+
+---
+# 🔧 Secret com configurações do Azure Monitor
+apiVersion: v1
+kind: Secret
+metadata:
+  name: azure-monitor-config
+  namespace: ecommerce
+type: Opaque
+stringData:
+  workspace-id: "your-azure-monitor-workspace-id"
+  prometheus-endpoint: "https://your-prometheus-endpoint.westus3.prometheus.monitor.azure.com"
+
+---
+# 🎯 Custom Resource Definition para Deployment Strategies
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: autonomousdeployments.deployment.istio.io
+spec:
+  group: deployment.istio.io
+  versions:
+  - name: v1alpha1
+    served: true
+    storage: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          spec:
+            type: object
+            properties:
+              targetRef:
+                type: object
+                properties:
+                  apiVersion:
+                    type: string
+                  kind:
+                    type: string
+                  name:
+                    type: string
+              strategy:
+                type: string
+                enum: ["canary", "blue-green", "ab-test", "unified"]
+              slos:
+                type: object
+                properties:
+                  successRate:
+                    type: number
+                  latencyP95:
+                    type: number
+                  errorRate:
+                    type: number
+              rollbackPolicy:
+                type: object
+                properties:
+                  automatic:
+                    type: boolean
+                  thresholds:
+                    type: object
+          status:
+            type: object
+            properties:
+              phase:
+                type: string
+              conditions:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type:
+                      type: string
+                    status:
+                      type: string
+                    reason:
+                      type: string
+                    message:
+                      type: string
+              currentVersion:
+                type: string
+              targetVersion:
+                type: string
+              trafficSplit:
+                type: object
+  scope: Namespaced
+  names:
+    plural: autonomousdeployments
+    singular: autonomousdeployment
+    kind: AutonomousDeployment
+    shortNames:
+    - autodepl
+
+---
+# 🚀 Instância do Autonomous Deployment para a aplicação
+apiVersion: deployment.istio.io/v1alpha1
+kind: AutonomousDeployment
+metadata:
+  name: ecommerce-app-autonomous
+  namespace: ecommerce
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: ecommerce-app
+  strategy: unified  # Usa todas as estratégias combinadas
+  slos:
+    successRate: 99.5
+    latencyP95: 500
+    errorRate: 0.5
+  rollbackPolicy:
+    automatic: true
+    thresholds:
+      consecutiveFailures: 3
+      evaluationWindow: "5m"
+      cooldownPeriod: "10m"
+  trafficManagement:
+    canary:
+      initialWeight: 5
+      increment: 5
+      maxWeight: 50
+      promotionInterval: "10m"
+    blueGreen:
+      switchThreshold: 95
+      validationPeriod: "15m"
+    abTest:
+      duration: "24h"
+      trafficSplit: 50
+  crossCluster:
+    enabled: true
+    primaryCluster: "aks-labs"
+    secondaryCluster: "aks-labs-secondary"
+    failoverPolicy:
+      automatic: true
+      threshold: 3
+      healthCheckInterval: "30s"
+
+---
+# 📋 RBAC para Webhook do Controlador
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionWebhook
+metadata:
+  name: autonomous-deployment-webhook
+webhooks:
+- name: autonomous-deployment.deployment.istio.io
+  clientConfig:
+    service:
+      name: autonomous-deployment-controller
+      namespace: ecommerce
+      path: "/mutate"
+  rules:
+  - operations: ["CREATE", "UPDATE"]
+    apiGroups: ["apps"]
+    apiVersions: ["v1"]
+    resources: ["deployments"]
+  admissionReviewVersions: ["v1", "v1beta1"]
+  sideEffects: None
+  failurePolicy: Fail
+  namespaceSelector:
+    matchLabels:
+      autonomous-deployment: "enabled"
+
+---
+# 🔄 CronJob para Limpeza e Manutenção
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: autonomous-deployment-maintenance
+  namespace: ecommerce
+spec:
+  schedule: "0 2 * * *"  # Todo dia às 2h da manhã
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: autonomous-deployment-controller
+          containers:
+          - name: maintenance
+            image: acrlabs.azurecr.io/autonomous-deployment-controller:v1.0.0
+            command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Starting maintenance tasks..."
+              
+              # Limpeza de recursos órfãos
+              kubectl get virtualservices -n ecommerce -o json | \
+                jq -r '.items[] | select(.metadata.labels.managed_by == "autonomous-controller" and .metadata.labels.cleanup_eligible == "true") | .metadata.name' | \
+                xargs -I {} kubectl delete virtualservice {} -n ecommerce
+              
+              # Limpeza de métricas antigas
+              curl -X POST "${PROMETHEUS_ENDPOINT}/api/v1/admin/tsdb/delete_series?match[]={job=\"autonomous-deployment-controller\"}&start=$(date -d '30 days ago' +%s)"
+              
+              # Compactação de dados
+              curl -X POST "${PROMETHEUS_ENDPOINT}/api/v1/admin/tsdb/snapshot"
+              
+              echo "Maintenance tasks completed"
+            env:
+            - name: PROMETHEUS_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: azure-monitor-config
+                  key: prometheus-endpoint
+          restartPolicy: OnFailure

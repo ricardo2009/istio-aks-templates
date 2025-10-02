@@ -1,0 +1,430 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cross-cluster-demo
+  labels:
+    istio-injection: enabled
+---
+# Payment API no Cluster 2
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-api
+  namespace: cross-cluster-demo
+  labels:
+    app: payment-api
+    version: v1
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: payment-api
+      version: v1
+  template:
+    metadata:
+      labels:
+        app: payment-api
+        version: v1
+        cluster: secondary
+    spec:
+      containers:
+      - name: payment-api
+        image: node:18-alpine
+        ports:
+        - containerPort: 3002
+        env:
+        - name: CLUSTER_NAME
+          value: "aks-istio-secondary"
+        - name: API_VERSION
+          value: "v1.0.0"
+        - name: AUDIT_API_URL
+          value: "http://audit-api.cross-cluster-demo.svc.cluster.local:3003"
+        command: ["/bin/sh"]
+        args:
+        - -c
+        - |
+          mkdir -p /app
+          cat > /app/server.js << 'EOF'
+          const http = require('http');
+          const url = require('url');
+          
+          const CLUSTER_NAME = process.env.CLUSTER_NAME || 'unknown';
+          const API_VERSION = process.env.API_VERSION || 'v1.0.0';
+          const AUDIT_API_URL = process.env.AUDIT_API_URL;
+          
+          // Função para fazer requisições HTTP
+          function makeRequest(targetUrl, timeout = 5000) {
+            return new Promise((resolve, reject) => {
+              const startTime = Date.now();
+              const req = http.get(targetUrl, { timeout }, (res) => {
+                let data = '';
+                res.on('data', chunk => data += chunk);
+                res.on('end', () => {
+                  const endTime = Date.now();
+                  resolve({
+                    statusCode: res.statusCode,
+                    data: data,
+                    responseTime: endTime - startTime
+                  });
+                });
+              });
+              
+              req.on('timeout', () => {
+                req.destroy();
+                reject(new Error('Request timeout'));
+              });
+              
+              req.on('error', (err) => {
+                reject(err);
+              });
+            });
+          }
+          
+          const server = http.createServer(async (req, res) => {
+            const startTime = Date.now();
+            const requestId = req.headers['x-request-id'] || Math.random().toString(36).substring(7);
+            const parsedUrl = url.parse(req.url, true);
+            const pathname = parsedUrl.pathname;
+            
+            res.setHeader('Content-Type', 'application/json');
+            res.setHeader('X-Cluster', CLUSTER_NAME);
+            res.setHeader('X-API-Version', API_VERSION);
+            res.setHeader('X-Request-ID', requestId);
+            res.setHeader('X-Pod-Name', process.env.HOSTNAME || 'unknown');
+            res.setHeader('Access-Control-Allow-Origin', '*');
+            
+            console.log(`[${new Date().toISOString()}] 💳 PAYMENT-CLUSTER-2 ${req.method} ${pathname} - RequestID: ${requestId}`);
+            console.log(`[${new Date().toISOString()}] 🔍 Headers recebidos: ${JSON.stringify(req.headers)}`);
+            
+            try {
+              if (pathname === '/') {
+                const response = {
+                  service: "Payment API",
+                  cluster: CLUSTER_NAME,
+                  version: API_VERSION,
+                  podName: process.env.HOSTNAME || 'unknown',
+                  timestamp: new Date().toISOString(),
+                  requestId: requestId,
+                  endpoints: [
+                    "/health",
+                    "/payment",
+                    "/metrics"
+                  ],
+                  crossClusterCommunication: "✅ ACTIVE",
+                  responseTime: Date.now() - startTime
+                };
+                res.writeHead(200);
+                res.end(JSON.stringify(response, null, 2));
+                
+              } else if (pathname === '/health') {
+                const response = {
+                  status: "✅ healthy",
+                  cluster: CLUSTER_NAME,
+                  version: API_VERSION,
+                  podName: process.env.HOSTNAME || 'unknown',
+                  timestamp: new Date().toISOString(),
+                  uptime: process.uptime(),
+                  memory: process.memoryUsage(),
+                  crossClusterReady: true,
+                  responseTime: Date.now() - startTime
+                };
+                res.writeHead(200);
+                res.end(JSON.stringify(response, null, 2));
+                
+              } else if (pathname === '/payment') {
+                console.log(`[${new Date().toISOString()}] 💳 Processando pagamento cross-cluster...`);
+                
+                // Simular processamento de pagamento
+                const processingTime = Math.floor(Math.random() * 200) + 100; // 100-300ms
+                await new Promise(resolve => setTimeout(resolve, processingTime));
+                
+                // Fazer chamada para audit API local
+                let auditResult = null;
+                try {
+                  console.log(`[${new Date().toISOString()}] 📝 Chamando audit API local...`);
+                  const auditResponse = await makeRequest(AUDIT_API_URL + '/audit');
+                  auditResult = {
+                    success: true,
+                    responseTime: auditResponse.responseTime,
+                    data: JSON.parse(auditResponse.data || '{}')
+                  };
+                  console.log(`[${new Date().toISOString()}] ✅ Audit concluído em ${auditResponse.responseTime}ms`);
+                } catch (error) {
+                  console.log(`[${new Date().toISOString()}] ⚠️  Audit falhou: ${error.message}`);
+                  auditResult = {
+                    success: false,
+                    error: error.message
+                  };
+                }
+                
+                const paymentId = `pay_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+                const success = Math.random() > 0.1; // 90% success rate
+                
+                const response = {
+                  service: "Payment API",
+                  cluster: CLUSTER_NAME,
+                  version: API_VERSION,
+                  podName: process.env.HOSTNAME || 'unknown',
+                  payment: {
+                    id: paymentId,
+                    status: success ? "✅ approved" : "❌ declined",
+                    amount: parseFloat(parsedUrl.query.amount) || 99.99,
+                    currency: parsedUrl.query.currency || "USD",
+                    processingTime: processingTime,
+                    timestamp: new Date().toISOString()
+                  },
+                  audit: auditResult,
+                  crossClusterCall: {
+                    source: "aks-istio-primary",
+                    target: "aks-istio-secondary",
+                    success: true,
+                    latency: Date.now() - startTime
+                  },
+                  istioMetrics: {
+                    traceId: req.headers['x-b3-traceid'] || 'unknown',
+                    spanId: req.headers['x-b3-spanid'] || 'unknown',
+                    parentSpanId: req.headers['x-b3-parentspanid'] || 'unknown'
+                  },
+                  responseTime: Date.now() - startTime
+                };
+                
+                console.log(`[${new Date().toISOString()}] 💳 Pagamento ${success ? 'aprovado' : 'recusado'} - ID: ${paymentId}`);
+                
+                res.writeHead(success ? 200 : 402);
+                res.end(JSON.stringify(response, null, 2));
+                
+              } else if (pathname === '/metrics') {
+                const response = {
+                  service: "payment-api",
+                  cluster: CLUSTER_NAME,
+                  version: API_VERSION,
+                  podName: process.env.HOSTNAME || 'unknown',
+                  metrics: {
+                    uptime: process.uptime(),
+                    memory: process.memoryUsage(),
+                    cpu: process.cpuUsage(),
+                    timestamp: new Date().toISOString()
+                  },
+                  responseTime: Date.now() - startTime
+                };
+                res.writeHead(200);
+                res.end(JSON.stringify(response, null, 2));
+                
+              } else {
+                const response = {
+                  error: "❌ Not Found",
+                  cluster: CLUSTER_NAME,
+                  service: "payment-api",
+                  availableEndpoints: ["/", "/health", "/payment", "/metrics"],
+                  responseTime: Date.now() - startTime
+                };
+                res.writeHead(404);
+                res.end(JSON.stringify(response, null, 2));
+              }
+              
+            } catch (error) {
+              console.error(`[${new Date().toISOString()}] 💥 Erro interno: ${error.message}`);
+              const response = {
+                error: "💥 Internal Server Error",
+                message: error.message,
+                cluster: CLUSTER_NAME,
+                service: "payment-api",
+                responseTime: Date.now() - startTime
+              };
+              res.writeHead(500);
+              res.end(JSON.stringify(response, null, 2));
+            }
+          });
+          
+          const PORT = 3002;
+          server.listen(PORT, '0.0.0.0', () => {
+            console.log(`[${new Date().toISOString()}] 💳 Payment API rodando no cluster ${CLUSTER_NAME} na porta ${PORT}`);
+            console.log(`[${new Date().toISOString()}] 📝 Audit URL: ${AUDIT_API_URL}`);
+          });
+          EOF
+          
+          cd /app && node server.js
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3002
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3002
+          initialDelaySeconds: 5
+          periodSeconds: 5
+---
+# Audit API local no Cluster 2
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: audit-api
+  namespace: cross-cluster-demo
+  labels:
+    app: audit-api
+    version: v1
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: audit-api
+      version: v1
+  template:
+    metadata:
+      labels:
+        app: audit-api
+        version: v1
+        cluster: secondary
+    spec:
+      containers:
+      - name: audit-api
+        image: node:18-alpine
+        ports:
+        - containerPort: 3003
+        env:
+        - name: CLUSTER_NAME
+          value: "aks-istio-secondary"
+        - name: API_VERSION
+          value: "v1.0.0"
+        command: ["/bin/sh"]
+        args:
+        - -c
+        - |
+          mkdir -p /app
+          cat > /app/server.js << 'EOF'
+          const http = require('http');
+          const url = require('url');
+          
+          const CLUSTER_NAME = process.env.CLUSTER_NAME || 'unknown';
+          const API_VERSION = process.env.API_VERSION || 'v1.0.0';
+          
+          const server = http.createServer(async (req, res) => {
+            const startTime = Date.now();
+            const requestId = req.headers['x-request-id'] || Math.random().toString(36).substring(7);
+            const parsedUrl = url.parse(req.url, true);
+            const pathname = parsedUrl.pathname;
+            
+            res.setHeader('Content-Type', 'application/json');
+            res.setHeader('X-Cluster', CLUSTER_NAME);
+            res.setHeader('X-API-Version', API_VERSION);
+            res.setHeader('X-Request-ID', requestId);
+            res.setHeader('X-Pod-Name', process.env.HOSTNAME || 'unknown');
+            res.setHeader('Access-Control-Allow-Origin', '*');
+            
+            console.log(`[${new Date().toISOString()}] 📝 AUDIT-CLUSTER-2 ${req.method} ${pathname} - RequestID: ${requestId}`);
+            
+            if (pathname === '/audit') {
+              // Simular auditoria
+              const auditTime = Math.floor(Math.random() * 50) + 25; // 25-75ms
+              await new Promise(resolve => setTimeout(resolve, auditTime));
+              
+              const auditId = `audit_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+              
+              const response = {
+                service: "Audit API",
+                cluster: CLUSTER_NAME,
+                version: API_VERSION,
+                podName: process.env.HOSTNAME || 'unknown',
+                audit: {
+                  id: auditId,
+                  status: "✅ logged",
+                  timestamp: new Date().toISOString(),
+                  auditTime: auditTime,
+                  requestId: requestId
+                },
+                responseTime: Date.now() - startTime
+              };
+              
+              console.log(`[${new Date().toISOString()}] 📝 Auditoria registrada - ID: ${auditId}`);
+              
+              res.writeHead(200);
+              res.end(JSON.stringify(response, null, 2));
+            } else {
+              const response = {
+                error: "❌ Not Found",
+                cluster: CLUSTER_NAME,
+                service: "audit-api",
+                availableEndpoints: ["/audit"],
+                responseTime: Date.now() - startTime
+              };
+              res.writeHead(404);
+              res.end(JSON.stringify(response, null, 2));
+            }
+          });
+          
+          const PORT = 3003;
+          server.listen(PORT, '0.0.0.0', () => {
+            console.log(`[${new Date().toISOString()}] 📝 Audit API rodando no cluster ${CLUSTER_NAME} na porta ${PORT}`);
+          });
+          EOF
+          
+          cd /app && node server.js
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi
+---
+# Services
+apiVersion: v1
+kind: Service
+metadata:
+  name: payment-api
+  namespace: cross-cluster-demo
+  labels:
+    app: payment-api
+spec:
+  ports:
+  - port: 3002
+    targetPort: 3002
+    name: http
+  selector:
+    app: payment-api
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: audit-api
+  namespace: cross-cluster-demo
+  labels:
+    app: audit-api
+spec:
+  ports:
+  - port: 3003
+    targetPort: 3003
+    name: http
+  selector:
+    app: audit-api
+---
+# HPA para escalabilidade automática
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: payment-api-hpa
+  namespace: cross-cluster-demo
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: payment-api
+  minReplicas: 2
+  maxReplicas: 8
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70

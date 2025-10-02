@@ -1,0 +1,272 @@
+# Combined A/B Testing + Blue/Green Deployment Strategy
+# This template demonstrates how to use multiple deployment strategies together
+
+# Blue/Green DestinationRule with A/B Testing subsets
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: SERVICE_NAME-combined-dr
+  namespace: NAMESPACE
+  labels:
+    app: SERVICE_NAME
+    strategy: ab-bluegreen-combined
+spec:
+  host: SERVICE_NAME.NAMESPACE.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: MAX_CONNECTIONS
+      http:
+        http1MaxPendingRequests: 10
+        maxRequestsPerConnection: 2
+    outlierDetection:
+      consecutiveGatewayErrors: CONSECUTIVE_5XX_ERRORS
+      consecutive5xxErrors: CONSECUTIVE_5XX_ERRORS
+      interval: 30s
+      baseEjectionTime: BASE_EJECTION_TIME
+      maxEjectionPercent: 50
+    loadBalancer:
+      simple: LEAST_CONN
+  subsets:
+  # Blue environment (current stable)
+  - name: blue-stable
+    labels:
+      version: blue
+      variant: stable
+  - name: blue-experimental
+    labels:
+      version: blue
+      variant: experimental
+  # Green environment (new version)
+  - name: green-stable
+    labels:
+      version: green
+      variant: stable
+  - name: green-experimental
+    labels:
+      version: green
+      variant: experimental
+---
+# Combined VirtualService for A/B Testing within Blue/Green
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: SERVICE_NAME-combined-vs
+  namespace: NAMESPACE
+  labels:
+    app: SERVICE_NAME
+    strategy: ab-bluegreen-combined
+spec:
+  hosts:
+  - SERVICE_NAME.NAMESPACE.svc.cluster.local
+  http:
+  # A/B Testing routes for beta users (always get experimental features)
+  - match:
+    - headers:
+        user-type:
+          exact: "beta"
+    route:
+    - destination:
+        host: SERVICE_NAME.NAMESPACE.svc.cluster.local
+        subset: ACTIVE_ENVIRONMENT-experimental
+      weight: 100
+    fault:
+      delay:
+        percentage:
+          value: 0.1
+        fixedDelay: 100ms
+    retries:
+      attempts: 3
+      perTryTimeout: 2s
+      retryOn: 5xx,reset,connect-failure,refused-stream
+  
+  # A/B Testing routes for premium users (50/50 split between stable/experimental)
+  - match:
+    - headers:
+        user-tier:
+          exact: "premium"
+    route:
+    - destination:
+        host: SERVICE_NAME.NAMESPACE.svc.cluster.local
+        subset: ACTIVE_ENVIRONMENT-stable
+      weight: 50
+    - destination:
+        host: SERVICE_NAME.NAMESPACE.svc.cluster.local
+        subset: ACTIVE_ENVIRONMENT-experimental
+      weight: 50
+    retries:
+      attempts: 3
+      perTryTimeout: 2s
+      retryOn: 5xx,reset,connect-failure,refused-stream
+  
+  # Canary testing within active environment (gradual rollout)
+  - match:
+    - headers:
+        canary:
+          exact: "true"
+    route:
+    - destination:
+        host: SERVICE_NAME.NAMESPACE.svc.cluster.local
+        subset: ACTIVE_ENVIRONMENT-experimental
+      weight: 100
+    retries:
+      attempts: 2
+      perTryTimeout: 1s
+      retryOn: 5xx,reset,connect-failure,refused-stream
+  
+  # Default traffic routing (majority to stable, small percentage to experimental)
+  - route:
+    - destination:
+        host: SERVICE_NAME.NAMESPACE.svc.cluster.local
+        subset: ACTIVE_ENVIRONMENT-stable
+      weight: STABLE_WEIGHT
+    - destination:
+        host: SERVICE_NAME.NAMESPACE.svc.cluster.local
+        subset: ACTIVE_ENVIRONMENT-experimental
+      weight: EXPERIMENTAL_WEIGHT
+    timeout: 10s
+    retries:
+      attempts: 3
+      perTryTimeout: 3s
+      retryOn: 5xx,reset,connect-failure,refused-stream
+---
+# ServiceMonitor for Prometheus metrics collection
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: SERVICE_NAME-combined-metrics
+  namespace: NAMESPACE
+  labels:
+    app: SERVICE_NAME
+    strategy: ab-bluegreen-combined
+spec:
+  selector:
+    matchLabels:
+      app: SERVICE_NAME
+  endpoints:
+  - port: http
+    path: /metrics
+    interval: 15s
+    scrapeTimeout: 10s
+  - port: http
+    path: /stats/prometheus
+    interval: 15s
+    scrapeTimeout: 10s
+---
+# Telemetry configuration for advanced metrics
+apiVersion: telemetry.istio.io/v1alpha1
+kind: Telemetry
+metadata:
+  name: SERVICE_NAME-combined-telemetry
+  namespace: NAMESPACE
+  labels:
+    app: SERVICE_NAME
+    strategy: ab-bluegreen-combined
+spec:
+  selector:
+    matchLabels:
+      app: SERVICE_NAME
+  metrics:
+  - providers:
+    - name: prometheus
+  - overrides:
+    - match:
+        metric: ALL_METRICS
+      tagOverrides:
+        deployment_strategy:
+          value: "ab-bluegreen-combined"
+        environment_type:
+          value: "ACTIVE_ENVIRONMENT"
+        variant_type:
+          value: "%{RESPONSE_HEADERS['x-variant-type']}"
+        user_segment:
+          value: "%{REQUEST_HEADERS['user-type']}"
+        user_tier:
+          value: "%{REQUEST_HEADERS['user-tier']}"
+  # Custom metrics for A/B testing analysis
+  - providers:
+    - name: prometheus
+  - overrides:
+    - match:
+        metric: requests_total
+      tagOverrides:
+        conversion_event:
+          value: "%{RESPONSE_HEADERS['x-conversion-event']}"
+        experiment_id:
+          value: "%{REQUEST_HEADERS['x-experiment-id']}"
+        variant_assignment:
+          value: "%{RESPONSE_HEADERS['x-variant-assignment']}"
+---
+# EnvoyFilter for advanced traffic shaping and feature flags
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: SERVICE_NAME-combined-filter
+  namespace: NAMESPACE
+  labels:
+    app: SERVICE_NAME
+    strategy: ab-bluegreen-combined
+spec:
+  workloadSelector:
+    labels:
+      app: SERVICE_NAME
+  configPatches:
+  # Add custom headers for variant tracking
+  - applyTo: HTTP_FILTER
+    match:
+      context: SIDECAR_INBOUND
+      listener:
+        filterChain:
+          filter:
+            name: "envoy.filters.network.http_connection_manager"
+    patch:
+      operation: INSERT_BEFORE
+      value:
+        name: envoy.filters.http.lua
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
+          inline_code: |
+            function envoy_on_request(request_handle)
+              -- Determine variant based on user characteristics
+              local user_type = request_handle:headers():get("user-type")
+              local user_tier = request_handle:headers():get("user-tier")
+              local user_id = request_handle:headers():get("user-id")
+              
+              local variant = "stable"
+              
+              -- Beta users always get experimental
+              if user_type == "beta" then
+                variant = "experimental"
+              -- Premium users get 50/50 split
+              elseif user_tier == "premium" then
+                if user_id and tonumber(user_id) % 2 == 0 then
+                  variant = "experimental"
+                end
+              -- Regular users get 10% experimental
+              elseif user_id and tonumber(user_id) % 10 == 0 then
+                variant = "experimental"
+              end
+              
+              -- Add variant header for routing
+              request_handle:headers():add("x-variant-assignment", variant)
+              
+              -- Add experiment tracking
+              request_handle:headers():add("x-experiment-id", "SERVICE_NAME-ab-test-v1")
+              request_handle:headers():add("x-deployment-strategy", "ab-bluegreen-combined")
+            end
+            
+            function envoy_on_response(response_handle)
+              -- Add response headers for metrics
+              local variant = response_handle:headers():get("x-variant-assignment")
+              if variant then
+                response_handle:headers():add("x-variant-type", variant)
+              end
+              
+              -- Track conversion events (example: successful API calls)
+              local status = response_handle:headers():get(":status")
+              if status and tonumber(status) >= 200 and tonumber(status) < 300 then
+                response_handle:headers():add("x-conversion-event", "success")
+              else
+                response_handle:headers():add("x-conversion-event", "failure")
+              end
+            end

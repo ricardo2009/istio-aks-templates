@@ -1,0 +1,475 @@
+---
+# Azure Key Vault Integration for Istio mTLS Certificates
+# This configuration integrates Azure Key Vault with Istio for certificate management
+
+# 1. Azure Key Vault CSI Driver Configuration
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: istio-certificates
+  labels:
+    istio-injection: enabled
+---
+# Service Account for Key Vault access
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: istio-keyvault-sa
+  namespace: istio-certificates
+  annotations:
+    azure.workload.identity/client-id: "6f37088c-e465-472f-a2f0-ac45a3fd8e57"
+    azure.workload.identity/tenant-id: "03ebf151-fe12-4011-976d-d593ff5252a0"
+---
+# SecretProviderClass for Istio Root CA
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: istio-root-ca-spc
+  namespace: istio-certificates
+spec:
+  provider: azure
+  parameters:
+    usePodIdentity: "false"
+    useVMManagedIdentity: "false"
+    userAssignedIdentityID: "6f37088c-e465-472f-a2f0-ac45a3fd8e57"
+    keyvaultName: "kv-istio-lab-certs"
+    tenantId: "03ebf151-fe12-4011-976d-d593ff5252a0"
+    objects: |
+      array:
+        - |
+          objectName: istio-root-ca-cert
+          objectType: certificate
+          objectFormat: pem
+        - |
+          objectName: istio-root-ca-key
+          objectType: secret
+          objectFormat: pem
+        - |
+          objectName: istio-intermediate-ca-cert
+          objectType: certificate
+          objectFormat: pem
+        - |
+          objectName: istio-intermediate-ca-key
+          objectType: secret
+          objectFormat: pem
+  secretObjects:
+  - secretName: istio-ca-secret
+    type: kubernetes.io/tls
+    data:
+    - objectName: istio-root-ca-cert
+      key: tls.crt
+    - objectName: istio-root-ca-key
+      key: tls.key
+  - secretName: istio-intermediate-ca-secret
+    type: kubernetes.io/tls
+    data:
+    - objectName: istio-intermediate-ca-cert
+      key: tls.crt
+    - objectName: istio-intermediate-ca-key
+      key: tls.key
+---
+# SecretProviderClass for Application Certificates
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: app-certificates-spc
+  namespace: ecommerce-unified
+spec:
+  provider: azure
+  parameters:
+    usePodIdentity: "false"
+    useVMManagedIdentity: "false"
+    userAssignedIdentityID: "6f37088c-e465-472f-a2f0-ac45a3fd8e57"
+    keyvaultName: "kv-istio-lab-certs"
+    tenantId: "03ebf151-fe12-4011-976d-d593ff5252a0"
+    objects: |
+      array:
+        - |
+          objectName: ecommerce-app-cert
+          objectType: certificate
+          objectFormat: pem
+        - |
+          objectName: ecommerce-app-key
+          objectType: secret
+          objectFormat: pem
+        - |
+          objectName: gateway-tls-cert
+          objectType: certificate
+          objectFormat: pem
+        - |
+          objectName: gateway-tls-key
+          objectType: secret
+          objectFormat: pem
+  secretObjects:
+  - secretName: ecommerce-app-tls
+    type: kubernetes.io/tls
+    data:
+    - objectName: ecommerce-app-cert
+      key: tls.crt
+    - objectName: ecommerce-app-key
+      key: tls.key
+  - secretName: gateway-tls-secret
+    type: kubernetes.io/tls
+    data:
+    - objectName: gateway-tls-cert
+      key: tls.crt
+    - objectName: gateway-tls-key
+      key: tls.key
+---
+# Deployment to mount Key Vault secrets
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: certificate-manager
+  namespace: istio-certificates
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: certificate-manager
+  template:
+    metadata:
+      labels:
+        app: certificate-manager
+    spec:
+      serviceAccountName: istio-keyvault-sa
+      containers:
+      - name: certificate-manager
+        image: mcr.microsoft.com/oss/kubernetes/pause:3.6
+        volumeMounts:
+        - name: istio-certs
+          mountPath: "/mnt/secrets-store"
+          readOnly: true
+        resources:
+          requests:
+            cpu: 10m
+            memory: 16Mi
+          limits:
+            cpu: 100m
+            memory: 128Mi
+      volumes:
+      - name: istio-certs
+        csi:
+          driver: secrets-store.csi.k8s.io
+          readOnly: true
+          volumeAttributes:
+            secretProviderClass: "istio-root-ca-spc"
+---
+# PeerAuthentication for STRICT mTLS
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default-strict-mtls
+  namespace: aks-istio-system
+spec:
+  mtls:
+    mode: STRICT
+---
+# PeerAuthentication for ecommerce namespace
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: ecommerce-strict-mtls
+  namespace: ecommerce-unified
+spec:
+  mtls:
+    mode: STRICT
+---
+# PeerAuthentication for cross-cluster namespace
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: cross-cluster-strict-mtls
+  namespace: cross-cluster-demo
+spec:
+  mtls:
+    mode: STRICT
+---
+# DestinationRule for mTLS enforcement
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: default-mtls-dr
+  namespace: aks-istio-system
+spec:
+  host: "*.local"
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+  exportTo:
+  - "*"
+---
+# Gateway with TLS termination using Key Vault certificates
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: ecommerce-tls-gateway
+  namespace: ecommerce-unified
+spec:
+  selector:
+    istio: aks-istio-ingressgateway-external
+  servers:
+  - port:
+      number: 443
+      name: https
+      protocol: HTTPS
+    tls:
+      mode: SIMPLE
+      credentialName: gateway-tls-secret
+    hosts:
+    - "ecommerce.lab.local"
+    - "*.ecommerce.lab.local"
+  - port:
+      number: 80
+      name: http
+      protocol: HTTP
+    hosts:
+    - "ecommerce.lab.local"
+    - "*.ecommerce.lab.local"
+    tls:
+      httpsRedirect: true
+---
+# AuthorizationPolicy for fine-grained access control
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: ecommerce-authz-policy
+  namespace: ecommerce-unified
+spec:
+  selector:
+    matchLabels:
+      app: ecommerce-app
+  rules:
+  # Allow traffic from ingress gateway
+  - from:
+    - source:
+        principals: ["cluster.local/ns/aks-istio-ingress/sa/aks-istio-ingressgateway-external"]
+    to:
+    - operation:
+        methods: ["GET", "POST", "PUT", "DELETE"]
+        paths: ["/*"]
+  # Allow cross-cluster communication
+  - from:
+    - source:
+        namespaces: ["cross-cluster-demo"]
+    to:
+    - operation:
+        methods: ["GET", "POST"]
+        paths: ["/api/*"]
+  # Allow internal service communication
+  - from:
+    - source:
+        namespaces: ["ecommerce-unified"]
+    to:
+    - operation:
+        methods: ["*"]
+---
+# ServiceMonitor for certificate monitoring
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: certificate-expiry-monitor
+  namespace: istio-certificates
+  labels:
+    app: certificate-manager
+spec:
+  selector:
+    matchLabels:
+      app: certificate-manager
+  endpoints:
+  - port: metrics
+    interval: 30s
+    path: /metrics
+---
+# Certificate expiry monitoring service
+apiVersion: v1
+kind: Service
+metadata:
+  name: certificate-expiry-service
+  namespace: istio-certificates
+  labels:
+    app: certificate-manager
+spec:
+  selector:
+    app: certificate-manager
+  ports:
+  - name: metrics
+    port: 8080
+    targetPort: 8080
+---
+# EnvoyFilter for additional mTLS configuration
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: mtls-stats-filter
+  namespace: aks-istio-system
+spec:
+  configPatches:
+  - applyTo: HTTP_FILTER
+    match:
+      context: SIDECAR_INBOUND
+      listener:
+        filterChain:
+          filter:
+            name: "envoy.filters.network.http_connection_manager"
+    patch:
+      operation: INSERT_BEFORE
+      value:
+        name: envoy.filters.http.wasm
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.http.wasm.v3.Wasm
+          config:
+            name: "mtls_stats"
+            root_id: "mtls_stats"
+            configuration:
+              "@type": type.googleapis.com/google.protobuf.StringValue
+              value: |
+                {
+                  "metric_name": "mtls_connection_security_policy",
+                  "labels": ["source_app", "destination_service", "security_policy"]
+                }
+---
+# Telemetry configuration for certificate monitoring
+apiVersion: telemetry.istio.io/v1alpha1
+kind: Telemetry
+metadata:
+  name: certificate-metrics
+  namespace: aks-istio-system
+spec:
+  metrics:
+  - providers:
+    - name: prometheus
+  - overrides:
+    - match:
+        metric: ALL_METRICS
+      tagOverrides:
+        source_certificate_fingerprint:
+          value: "%{DOWNSTREAM_TLS_FINGERPRINT}"
+        destination_certificate_fingerprint:
+          value: "%{UPSTREAM_TLS_FINGERPRINT}"
+        mtls_enabled:
+          value: "%{CONNECTION_MTLS}"
+---
+# Workload Identity binding for Key Vault access
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: workload-identity-sa
+  namespace: ecommerce-unified
+  annotations:
+    azure.workload.identity/client-id: "6f37088c-e465-472f-a2f0-ac45a3fd8e57"
+    azure.workload.identity/tenant-id: "03ebf151-fe12-4011-976d-d593ff5252a0"
+---
+# Certificate rotation CronJob
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: certificate-rotation
+  namespace: istio-certificates
+spec:
+  schedule: "0 2 * * 0"  # Every Sunday at 2 AM
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: istio-keyvault-sa
+          containers:
+          - name: cert-rotator
+            image: mcr.microsoft.com/azure-cli:latest
+            command:
+            - /bin/bash
+            - -c
+            - |
+              echo "🔄 Starting certificate rotation process..."
+              
+              # Check certificate expiry
+              CERT_EXPIRY=$(openssl x509 -in /mnt/secrets-store/istio-root-ca-cert -noout -enddate | cut -d= -f2)
+              EXPIRY_EPOCH=$(date -d "$CERT_EXPIRY" +%s)
+              CURRENT_EPOCH=$(date +%s)
+              DAYS_UNTIL_EXPIRY=$(( ($EXPIRY_EPOCH - $CURRENT_EPOCH) / 86400 ))
+              
+              echo "📅 Certificate expires in $DAYS_UNTIL_EXPIRY days"
+              
+              if [ $DAYS_UNTIL_EXPIRY -lt 30 ]; then
+                echo "⚠️  Certificate expires soon, triggering rotation..."
+                
+                # Trigger certificate renewal in Key Vault
+                az login --identity --username $AZURE_CLIENT_ID
+                az keyvault certificate create \
+                  --vault-name kv-istio-lab-certs \
+                  --name istio-root-ca-cert \
+                  --policy @/etc/cert-policy/policy.json
+                
+                echo "✅ Certificate rotation completed"
+              else
+                echo "✅ Certificate is still valid"
+              fi
+            volumeMounts:
+            - name: istio-certs
+              mountPath: "/mnt/secrets-store"
+              readOnly: true
+            - name: cert-policy
+              mountPath: "/etc/cert-policy"
+              readOnly: true
+            env:
+            - name: AZURE_CLIENT_ID
+              value: "6f37088c-e465-472f-a2f0-ac45a3fd8e57"
+            - name: AZURE_TENANT_ID
+              value: "03ebf151-fe12-4011-976d-d593ff5252a0"
+          volumes:
+          - name: istio-certs
+            csi:
+              driver: secrets-store.csi.k8s.io
+              readOnly: true
+              volumeAttributes:
+                secretProviderClass: "istio-root-ca-spc"
+          - name: cert-policy
+            configMap:
+              name: certificate-policy
+          restartPolicy: OnFailure
+---
+# ConfigMap with certificate policy
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: certificate-policy
+  namespace: istio-certificates
+data:
+  policy.json: |
+    {
+      "issuerParameters": {
+        "certificateType": "OV-SSL",
+        "certificateTransparency": false
+      },
+      "keyProperties": {
+        "exportable": true,
+        "keySize": 2048,
+        "keyType": "RSA",
+        "reuseKey": false
+      },
+      "lifetimeActions": [
+        {
+          "action": {
+            "actionType": "AutoRenew"
+          },
+          "trigger": {
+            "daysBeforeExpiry": 30
+          }
+        }
+      ],
+      "secretProperties": {
+        "contentType": "application/x-pem-file"
+      },
+      "x509CertificateProperties": {
+        "keyUsage": [
+          "cRLSign",
+          "dataEncipherment",
+          "digitalSignature",
+          "keyAgreement",
+          "keyCertSign",
+          "keyEncipherment"
+        ],
+        "subject": "CN=Istio Root CA,O=Lab Istio,L=Cloud,ST=Azure,C=US",
+        "validityInMonths": 12
+      }
+    }

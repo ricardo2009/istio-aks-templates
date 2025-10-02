@@ -1,0 +1,262 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: no-istio-demo
+  # Sem label istio-injection para não injetar sidecar
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-no-istio
+  namespace: no-istio-demo
+  labels:
+    app: api-no-istio
+    version: v1
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: api-no-istio
+      version: v1
+  template:
+    metadata:
+      labels:
+        app: api-no-istio
+        version: v1
+    spec:
+      containers:
+      - name: api
+        image: node:18-alpine
+        ports:
+        - containerPort: 3000
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: CLUSTER_NAME
+          value: "no-istio"
+        - name: SERVICE_VERSION
+          value: "v1"
+        command: ["/bin/sh"]
+        args:
+        - -c
+        - |
+          cat > /app/server.js << 'EOF'
+          const http = require('http');
+          const url = require('url');
+          
+          const CLUSTER_NAME = process.env.CLUSTER_NAME || 'no-istio';
+          const SERVICE_VERSION = process.env.SERVICE_VERSION || 'v1';
+          
+          // Função para obter informações do sistema
+          function getSystemInfo() {
+            const os = require('os');
+            return {
+              hostname: os.hostname(),
+              platform: os.platform(),
+              arch: os.arch(),
+              cpus: os.cpus().length,
+              memory: {
+                total: Math.round(os.totalmem() / 1024 / 1024),
+                free: Math.round(os.freemem() / 1024 / 1024)
+              },
+              uptime: os.uptime(),
+              loadavg: os.loadavg(),
+              networkHops: 'Direct (no service mesh)'
+            };
+          }
+          
+          const server = http.createServer(async (req, res) => {
+            const startTime = Date.now();
+            const requestId = req.headers['x-request-id'] || Math.random().toString(36).substring(7);
+            
+            // CORS headers
+            res.setHeader('Access-Control-Allow-Origin', '*');
+            res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+            res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Request-ID, X-Source-Cluster');
+            res.setHeader('Content-Type', 'application/json');
+            res.setHeader('X-Response-From', CLUSTER_NAME);
+            res.setHeader('X-Service-Version', SERVICE_VERSION);
+            res.setHeader('X-Request-ID', requestId);
+            res.setHeader('X-Service-Mesh', 'None');
+            
+            if (req.method === 'OPTIONS') {
+              res.writeHead(200);
+              res.end();
+              return;
+            }
+            
+            const parsedUrl = url.parse(req.url, true);
+            const pathname = parsedUrl.pathname;
+            
+            console.log(`[${new Date().toISOString()}] ${req.method} ${pathname} - Request ID: ${requestId} (NO ISTIO)`);
+            
+            try {
+              if (pathname === '/health') {
+                const response = {
+                  status: 'healthy',
+                  cluster: CLUSTER_NAME,
+                  version: SERVICE_VERSION,
+                  timestamp: new Date().toISOString(),
+                  requestId: requestId,
+                  serviceMesh: 'None',
+                  networkPath: 'Direct connection (no sidecar proxy)',
+                  responseTime: Date.now() - startTime
+                };
+                res.writeHead(200);
+                res.end(JSON.stringify(response, null, 2));
+                
+              } else if (pathname === '/info') {
+                const response = {
+                  cluster: CLUSTER_NAME,
+                  version: SERVICE_VERSION,
+                  timestamp: new Date().toISOString(),
+                  requestId: requestId,
+                  serviceMesh: 'None',
+                  system: getSystemInfo(),
+                  networkDetails: {
+                    proxy: 'None',
+                    encryption: 'None (plain HTTP)',
+                    loadBalancing: 'Kubernetes Service only',
+                    circuitBreaker: 'None',
+                    retries: 'None',
+                    observability: 'Basic Kubernetes logs only'
+                  },
+                  responseTime: Date.now() - startTime
+                };
+                res.writeHead(200);
+                res.end(JSON.stringify(response, null, 2));
+                
+              } else if (pathname === '/performance-test') {
+                const iterations = parseInt(parsedUrl.query.iterations) || 100;
+                
+                console.log(`[${new Date().toISOString()}] Iniciando teste de performance sem Istio: ${iterations} iterações`);
+                
+                const results = [];
+                for (let i = 0; i < iterations; i++) {
+                  const iterationStart = Date.now();
+                  
+                  // Simular processamento simples
+                  let sum = 0;
+                  for (let j = 0; j < 1000; j++) {
+                    sum += Math.random();
+                  }
+                  
+                  const iterationEnd = Date.now();
+                  results.push({
+                    iteration: i + 1,
+                    processingTime: iterationEnd - iterationStart,
+                    result: sum,
+                    timestamp: new Date().toISOString()
+                  });
+                }
+                
+                const totalTime = results.reduce((sum, result) => sum + result.processingTime, 0);
+                const avgTime = totalTime / results.length;
+                
+                const response = {
+                  cluster: CLUSTER_NAME,
+                  version: SERVICE_VERSION,
+                  timestamp: new Date().toISOString(),
+                  requestId: requestId,
+                  serviceMesh: 'None',
+                  performanceTest: {
+                    iterations: iterations,
+                    results: results.slice(0, 10), // Mostrar apenas os primeiros 10 para não sobrecarregar
+                    summary: {
+                      totalIterations: results.length,
+                      averageProcessingTime: `${avgTime.toFixed(2)}ms`,
+                      minProcessingTime: `${Math.min(...results.map(r => r.processingTime))}ms`,
+                      maxProcessingTime: `${Math.max(...results.map(r => r.processingTime))}ms`,
+                      totalTestTime: `${Date.now() - startTime}ms`,
+                      networkOverhead: 'Minimal (no service mesh)',
+                      securityOverhead: 'None (no mTLS)',
+                      observabilityOverhead: 'None (no telemetry)'
+                    }
+                  },
+                  responseTime: Date.now() - startTime
+                };
+                
+                console.log(`[${new Date().toISOString()}] Teste de performance sem Istio concluído: ${avgTime.toFixed(2)}ms média`);
+                
+                res.writeHead(200);
+                res.end(JSON.stringify(response, null, 2));
+                
+              } else {
+                const response = {
+                  error: 'Not Found',
+                  cluster: CLUSTER_NAME,
+                  version: SERVICE_VERSION,
+                  timestamp: new Date().toISOString(),
+                  requestId: requestId,
+                  serviceMesh: 'None',
+                  availableEndpoints: [
+                    '/health',
+                    '/info',
+                    '/performance-test?iterations=100'
+                  ],
+                  responseTime: Date.now() - startTime
+                };
+                res.writeHead(404);
+                res.end(JSON.stringify(response, null, 2));
+              }
+              
+            } catch (error) {
+              console.error(`[${new Date().toISOString()}] Erro: ${error.message}`);
+              const response = {
+                error: 'Internal Server Error',
+                message: error.message,
+                cluster: CLUSTER_NAME,
+                version: SERVICE_VERSION,
+                timestamp: new Date().toISOString(),
+                requestId: requestId,
+                serviceMesh: 'None',
+                responseTime: Date.now() - startTime
+              };
+              res.writeHead(500);
+              res.end(JSON.stringify(response, null, 2));
+            }
+          });
+          
+          const PORT = 3000;
+          server.listen(PORT, '0.0.0.0', () => {
+            console.log(`[${new Date().toISOString()}] API sem Istio rodando na porta ${PORT}`);
+            console.log(`[${new Date().toISOString()}] Cluster: ${CLUSTER_NAME}, Versão: ${SERVICE_VERSION}`);
+            console.log(`[${new Date().toISOString()}] Service Mesh: Nenhum (comparação de performance)`);
+          });
+          EOF
+          
+          cd /app && node server.js
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-no-istio
+  namespace: no-istio-demo
+  labels:
+    app: api-no-istio
+spec:
+  ports:
+  - port: 3000
+    targetPort: 3000
+    name: http
+  selector:
+    app: api-no-istio

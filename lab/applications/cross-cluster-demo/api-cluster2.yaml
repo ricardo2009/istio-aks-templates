@@ -1,0 +1,318 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cross-cluster-demo
+  labels:
+    istio-injection: enabled
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-cluster2
+  namespace: cross-cluster-demo
+  labels:
+    app: api-cluster2
+    version: v1
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: api-cluster2
+      version: v1
+  template:
+    metadata:
+      labels:
+        app: api-cluster2
+        version: v1
+    spec:
+      containers:
+      - name: api
+        image: node:18-alpine
+        ports:
+        - containerPort: 3000
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: CLUSTER_NAME
+          value: "secondary"
+        - name: SERVICE_VERSION
+          value: "v1"
+        - name: CROSS_CLUSTER_API_URL
+          value: "http://api-cluster1.cross-cluster-demo.svc.cluster.local:3000"
+        command: ["/bin/sh"]
+        args:
+        - -c
+        - |
+          cat > /app/server.js << 'EOF'
+          const http = require('http');
+          const url = require('url');
+          
+          const CLUSTER_NAME = process.env.CLUSTER_NAME || 'unknown';
+          const SERVICE_VERSION = process.env.SERVICE_VERSION || 'v1';
+          const CROSS_CLUSTER_URL = process.env.CROSS_CLUSTER_API_URL;
+          
+          // Função para fazer requisição HTTP
+          function makeRequest(targetUrl, timeout = 5000) {
+            return new Promise((resolve, reject) => {
+              const startTime = Date.now();
+              const parsedUrl = url.parse(targetUrl);
+              
+              const options = {
+                hostname: parsedUrl.hostname,
+                port: parsedUrl.port || 3000,
+                path: parsedUrl.path || '/',
+                method: 'GET',
+                timeout: timeout,
+                headers: {
+                  'User-Agent': 'Cross-Cluster-Demo/1.0',
+                  'X-Source-Cluster': CLUSTER_NAME,
+                  'X-Request-ID': Math.random().toString(36).substring(7)
+                }
+              };
+              
+              const req = http.request(options, (res) => {
+                let data = '';
+                res.on('data', (chunk) => data += chunk);
+                res.on('end', () => {
+                  const endTime = Date.now();
+                  const responseTime = endTime - startTime;
+                  
+                  try {
+                    const jsonData = JSON.parse(data);
+                    resolve({
+                      success: true,
+                      responseTime: responseTime,
+                      statusCode: res.statusCode,
+                      data: jsonData,
+                      headers: res.headers
+                    });
+                  } catch (e) {
+                    resolve({
+                      success: true,
+                      responseTime: responseTime,
+                      statusCode: res.statusCode,
+                      data: data,
+                      headers: res.headers
+                    });
+                  }
+                });
+              });
+              
+              req.on('error', (err) => {
+                const endTime = Date.now();
+                const responseTime = endTime - startTime;
+                resolve({
+                  success: false,
+                  responseTime: responseTime,
+                  error: err.message,
+                  statusCode: 0
+                });
+              });
+              
+              req.on('timeout', () => {
+                req.destroy();
+                const endTime = Date.now();
+                const responseTime = endTime - startTime;
+                resolve({
+                  success: false,
+                  responseTime: responseTime,
+                  error: 'Request timeout',
+                  statusCode: 408
+                });
+              });
+              
+              req.end();
+            });
+          }
+          
+          // Função para obter informações do sistema
+          function getSystemInfo() {
+            const os = require('os');
+            return {
+              hostname: os.hostname(),
+              platform: os.platform(),
+              arch: os.arch(),
+              cpus: os.cpus().length,
+              memory: {
+                total: Math.round(os.totalmem() / 1024 / 1024),
+                free: Math.round(os.freemem() / 1024 / 1024)
+              },
+              uptime: os.uptime(),
+              loadavg: os.loadavg()
+            };
+          }
+          
+          const server = http.createServer(async (req, res) => {
+            const startTime = Date.now();
+            const requestId = req.headers['x-request-id'] || Math.random().toString(36).substring(7);
+            
+            // CORS headers
+            res.setHeader('Access-Control-Allow-Origin', '*');
+            res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+            res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Request-ID, X-Source-Cluster');
+            res.setHeader('Content-Type', 'application/json');
+            res.setHeader('X-Response-From', CLUSTER_NAME);
+            res.setHeader('X-Service-Version', SERVICE_VERSION);
+            res.setHeader('X-Request-ID', requestId);
+            
+            if (req.method === 'OPTIONS') {
+              res.writeHead(200);
+              res.end();
+              return;
+            }
+            
+            const parsedUrl = url.parse(req.url, true);
+            const pathname = parsedUrl.pathname;
+            
+            console.log(`[${new Date().toISOString()}] ${req.method} ${pathname} - Request ID: ${requestId}`);
+            
+            try {
+              if (pathname === '/health') {
+                // Simular processamento mais longo no cluster secundário
+                await new Promise(resolve => setTimeout(resolve, 50));
+                
+                const response = {
+                  status: 'healthy',
+                  cluster: CLUSTER_NAME,
+                  version: SERVICE_VERSION,
+                  timestamp: new Date().toISOString(),
+                  requestId: requestId,
+                  processingTime: 50,
+                  responseTime: Date.now() - startTime
+                };
+                res.writeHead(200);
+                res.end(JSON.stringify(response, null, 2));
+                
+              } else if (pathname === '/info') {
+                const response = {
+                  cluster: CLUSTER_NAME,
+                  version: SERVICE_VERSION,
+                  timestamp: new Date().toISOString(),
+                  requestId: requestId,
+                  system: getSystemInfo(),
+                  responseTime: Date.now() - startTime
+                };
+                res.writeHead(200);
+                res.end(JSON.stringify(response, null, 2));
+                
+              } else if (pathname === '/database-simulation') {
+                // Simular operação de banco de dados
+                const operations = parseInt(parsedUrl.query.operations) || 10;
+                const delay = parseInt(parsedUrl.query.delay) || 100;
+                
+                console.log(`[${new Date().toISOString()}] Simulando ${operations} operações de BD com ${delay}ms de delay cada`);
+                
+                const results = [];
+                for (let i = 0; i < operations; i++) {
+                  const opStart = Date.now();
+                  await new Promise(resolve => setTimeout(resolve, delay));
+                  const opEnd = Date.now();
+                  
+                  results.push({
+                    operation: i + 1,
+                    type: 'SELECT',
+                    table: `table_${i % 3 + 1}`,
+                    duration: opEnd - opStart,
+                    timestamp: new Date().toISOString()
+                  });
+                }
+                
+                const response = {
+                  cluster: CLUSTER_NAME,
+                  version: SERVICE_VERSION,
+                  timestamp: new Date().toISOString(),
+                  requestId: requestId,
+                  databaseSimulation: {
+                    totalOperations: operations,
+                    operationDelay: delay,
+                    results: results,
+                    summary: {
+                      totalTime: results.reduce((sum, op) => sum + op.duration, 0),
+                      averageOperationTime: results.reduce((sum, op) => sum + op.duration, 0) / results.length
+                    }
+                  },
+                  responseTime: Date.now() - startTime
+                };
+                
+                console.log(`[${new Date().toISOString()}] Simulação de BD concluída: ${operations} operações`);
+                
+                res.writeHead(200);
+                res.end(JSON.stringify(response, null, 2));
+                
+              } else {
+                const response = {
+                  error: 'Not Found',
+                  cluster: CLUSTER_NAME,
+                  version: SERVICE_VERSION,
+                  timestamp: new Date().toISOString(),
+                  requestId: requestId,
+                  availableEndpoints: [
+                    '/health',
+                    '/info',
+                    '/database-simulation?operations=10&delay=100'
+                  ],
+                  responseTime: Date.now() - startTime
+                };
+                res.writeHead(404);
+                res.end(JSON.stringify(response, null, 2));
+              }
+              
+            } catch (error) {
+              console.error(`[${new Date().toISOString()}] Erro: ${error.message}`);
+              const response = {
+                error: 'Internal Server Error',
+                message: error.message,
+                cluster: CLUSTER_NAME,
+                version: SERVICE_VERSION,
+                timestamp: new Date().toISOString(),
+                requestId: requestId,
+                responseTime: Date.now() - startTime
+              };
+              res.writeHead(500);
+              res.end(JSON.stringify(response, null, 2));
+            }
+          });
+          
+          const PORT = 3000;
+          server.listen(PORT, '0.0.0.0', () => {
+            console.log(`[${new Date().toISOString()}] API Cluster 2 rodando na porta ${PORT}`);
+            console.log(`[${new Date().toISOString()}] Cluster: ${CLUSTER_NAME}, Versão: ${SERVICE_VERSION}`);
+            console.log(`[${new Date().toISOString()}] Cross-cluster URL: ${CROSS_CLUSTER_URL}`);
+          });
+          EOF
+          
+          cd /app && node server.js
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-cluster2
+  namespace: cross-cluster-demo
+  labels:
+    app: api-cluster2
+spec:
+  ports:
+  - port: 3000
+    targetPort: 3000
+    name: http
+  selector:
+    app: api-cluster2

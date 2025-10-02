@@ -1,0 +1,689 @@
+# Ultimate Combined Deployment Strategy: A/B Testing + Blue/Green + Canary
+# This template demonstrates the most advanced deployment strategy combining all three approaches
+
+# Advanced DestinationRule with multiple deployment strategies
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: SERVICE_NAME-ultimate-dr
+  namespace: NAMESPACE
+  labels:
+    app: SERVICE_NAME
+    strategy: ab-bluegreen-canary-ultimate
+spec:
+  host: SERVICE_NAME.NAMESPACE.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: MAX_CONNECTIONS
+        connectTimeout: 10s
+        tcpKeepalive:
+          time: 7200s
+          interval: 75s
+      http:
+        http1MaxPendingRequests: 10
+        http2MaxRequests: 100
+        maxRequestsPerConnection: 2
+        maxRetries: 3
+        consecutiveGatewayFailure: 5
+        h2UpgradePolicy: UPGRADE
+    outlierDetection:
+      consecutiveGatewayErrors: CONSECUTIVE_5XX_ERRORS
+      consecutive5xxErrors: CONSECUTIVE_5XX_ERRORS
+      interval: 30s
+      baseEjectionTime: BASE_EJECTION_TIME
+      maxEjectionPercent: 50
+      minHealthPercent: 30
+    loadBalancer:
+      simple: LEAST_CONN
+      consistentHash:
+        httpHeaderName: "user-id"
+  subsets:
+  # Blue environment subsets
+  - name: blue-stable
+    labels:
+      version: blue
+      variant: stable
+    trafficPolicy:
+      connectionPool:
+        tcp:
+          maxConnections: 50
+  - name: blue-experimental
+    labels:
+      version: blue
+      variant: experimental
+    trafficPolicy:
+      connectionPool:
+        tcp:
+          maxConnections: 30
+  - name: blue-canary
+    labels:
+      version: blue
+      variant: canary
+    trafficPolicy:
+      connectionPool:
+        tcp:
+          maxConnections: 20
+      outlierDetection:
+        consecutiveGatewayErrors: 2
+        consecutive5xxErrors: 2
+        interval: 15s
+        baseEjectionTime: 30s
+  # Green environment subsets
+  - name: green-stable
+    labels:
+      version: green
+      variant: stable
+    trafficPolicy:
+      connectionPool:
+        tcp:
+          maxConnections: 50
+  - name: green-experimental
+    labels:
+      version: green
+      variant: experimental
+    trafficPolicy:
+      connectionPool:
+        tcp:
+          maxConnections: 30
+  - name: green-canary
+    labels:
+      version: green
+      variant: canary
+    trafficPolicy:
+      connectionPool:
+        tcp:
+          maxConnections: 20
+      outlierDetection:
+        consecutiveGatewayErrors: 2
+        consecutive5xxErrors: 2
+        interval: 15s
+        baseEjectionTime: 30s
+---
+# Ultimate VirtualService combining all deployment strategies
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: SERVICE_NAME-ultimate-vs
+  namespace: NAMESPACE
+  labels:
+    app: SERVICE_NAME
+    strategy: ab-bluegreen-canary-ultimate
+spec:
+  hosts:
+  - SERVICE_NAME.NAMESPACE.svc.cluster.local
+  http:
+  # Priority 1: Canary testing (highest priority for specific canary users)
+  - match:
+    - headers:
+        canary-user:
+          exact: "true"
+    - headers:
+        x-canary-token:
+          regex: "^canary-[a-zA-Z0-9]{8}$"
+    route:
+    - destination:
+        host: SERVICE_NAME.NAMESPACE.svc.cluster.local
+        subset: ACTIVE_ENVIRONMENT-canary
+      weight: 100
+    fault:
+      delay:
+        percentage:
+          value: 0.1
+        fixedDelay: 50ms
+    retries:
+      attempts: 2
+      perTryTimeout: 1s
+      retryOn: 5xx,reset,connect-failure,refused-stream
+    headers:
+      response:
+        add:
+          x-deployment-type: "canary"
+          x-environment: "ACTIVE_ENVIRONMENT"
+          x-variant: "canary"
+  
+  # Priority 2: A/B Testing for beta users (always experimental features)
+  - match:
+    - headers:
+        user-type:
+          exact: "beta"
+    route:
+    - destination:
+        host: SERVICE_NAME.NAMESPACE.svc.cluster.local
+        subset: ACTIVE_ENVIRONMENT-experimental
+      weight: 100
+    fault:
+      delay:
+        percentage:
+          value: 0.1
+        fixedDelay: 100ms
+    retries:
+      attempts: 3
+      perTryTimeout: 2s
+      retryOn: 5xx,reset,connect-failure,refused-stream
+    headers:
+      response:
+        add:
+          x-deployment-type: "ab-testing"
+          x-environment: "ACTIVE_ENVIRONMENT"
+          x-variant: "experimental"
+          x-user-segment: "beta"
+  
+  # Priority 3: A/B Testing for premium users with canary integration
+  - match:
+    - headers:
+        user-tier:
+          exact: "premium"
+    route:
+    # 70% to stable, 20% to experimental, 10% to canary
+    - destination:
+        host: SERVICE_NAME.NAMESPACE.svc.cluster.local
+        subset: ACTIVE_ENVIRONMENT-stable
+      weight: 70
+    - destination:
+        host: SERVICE_NAME.NAMESPACE.svc.cluster.local
+        subset: ACTIVE_ENVIRONMENT-experimental
+      weight: 20
+    - destination:
+        host: SERVICE_NAME.NAMESPACE.svc.cluster.local
+        subset: ACTIVE_ENVIRONMENT-canary
+      weight: 10
+    retries:
+      attempts: 3
+      perTryTimeout: 2s
+      retryOn: 5xx,reset,connect-failure,refused-stream
+    headers:
+      response:
+        add:
+          x-deployment-type: "ab-testing-with-canary"
+          x-environment: "ACTIVE_ENVIRONMENT"
+          x-user-segment: "premium"
+  
+  # Priority 4: Gradual canary rollout (percentage-based)
+  - match:
+    - headers:
+        canary-percentage:
+          exact: "true"
+    route:
+    - destination:
+        host: SERVICE_NAME.NAMESPACE.svc.cluster.local
+        subset: ACTIVE_ENVIRONMENT-stable
+      weight: STABLE_WEIGHT
+    - destination:
+        host: SERVICE_NAME.NAMESPACE.svc.cluster.local
+        subset: ACTIVE_ENVIRONMENT-canary
+      weight: CANARY_WEIGHT
+    retries:
+      attempts: 2
+      perTryTimeout: 1s
+      retryOn: 5xx,reset,connect-failure,refused-stream
+    headers:
+      response:
+        add:
+          x-deployment-type: "canary-percentage"
+          x-environment: "ACTIVE_ENVIRONMENT"
+  
+  # Priority 5: Shadow traffic testing (mirror to canary)
+  - match:
+    - headers:
+        shadow-testing:
+          exact: "true"
+    route:
+    - destination:
+        host: SERVICE_NAME.NAMESPACE.svc.cluster.local
+        subset: ACTIVE_ENVIRONMENT-stable
+      weight: 100
+    mirror:
+      host: SERVICE_NAME.NAMESPACE.svc.cluster.local
+      subset: ACTIVE_ENVIRONMENT-canary
+    mirrorPercentage:
+      value: SHADOW_PERCENTAGE
+    headers:
+      response:
+        add:
+          x-deployment-type: "shadow-testing"
+          x-environment: "ACTIVE_ENVIRONMENT"
+  
+  # Priority 6: Feature flag based routing
+  - match:
+    - headers:
+        feature-flags:
+          regex: ".*new-feature-enabled.*"
+    route:
+    - destination:
+        host: SERVICE_NAME.NAMESPACE.svc.cluster.local
+        subset: ACTIVE_ENVIRONMENT-experimental
+      weight: 100
+    headers:
+      response:
+        add:
+          x-deployment-type: "feature-flag"
+          x-environment: "ACTIVE_ENVIRONMENT"
+          x-variant: "experimental"
+  
+  # Priority 7: Geographic routing (example: canary in specific regions)
+  - match:
+    - headers:
+        x-region:
+          exact: "us-west-2"
+    route:
+    - destination:
+        host: SERVICE_NAME.NAMESPACE.svc.cluster.local
+        subset: ACTIVE_ENVIRONMENT-canary
+      weight: 50
+    - destination:
+        host: SERVICE_NAME.NAMESPACE.svc.cluster.local
+        subset: ACTIVE_ENVIRONMENT-stable
+      weight: 50
+    headers:
+      response:
+        add:
+          x-deployment-type: "geo-canary"
+          x-environment: "ACTIVE_ENVIRONMENT"
+          x-region: "us-west-2"
+  
+  # Default traffic routing (majority to stable, small percentages to experimental and canary)
+  - route:
+    - destination:
+        host: SERVICE_NAME.NAMESPACE.svc.cluster.local
+        subset: ACTIVE_ENVIRONMENT-stable
+      weight: DEFAULT_STABLE_WEIGHT
+    - destination:
+        host: SERVICE_NAME.NAMESPACE.svc.cluster.local
+        subset: ACTIVE_ENVIRONMENT-experimental
+      weight: DEFAULT_EXPERIMENTAL_WEIGHT
+    - destination:
+        host: SERVICE_NAME.NAMESPACE.svc.cluster.local
+        subset: ACTIVE_ENVIRONMENT-canary
+      weight: DEFAULT_CANARY_WEIGHT
+    timeout: 10s
+    retries:
+      attempts: 3
+      perTryTimeout: 3s
+      retryOn: 5xx,reset,connect-failure,refused-stream
+    headers:
+      response:
+        add:
+          x-deployment-type: "default-routing"
+          x-environment: "ACTIVE_ENVIRONMENT"
+---
+# Advanced Telemetry for comprehensive metrics collection
+apiVersion: telemetry.istio.io/v1alpha1
+kind: Telemetry
+metadata:
+  name: SERVICE_NAME-ultimate-telemetry
+  namespace: NAMESPACE
+  labels:
+    app: SERVICE_NAME
+    strategy: ab-bluegreen-canary-ultimate
+spec:
+  selector:
+    matchLabels:
+      app: SERVICE_NAME
+  metrics:
+  - providers:
+    - name: prometheus
+  - overrides:
+    - match:
+        metric: ALL_METRICS
+      tagOverrides:
+        deployment_strategy:
+          value: "ab-bluegreen-canary-ultimate"
+        environment_type:
+          value: "ACTIVE_ENVIRONMENT"
+        variant_type:
+          value: "%{RESPONSE_HEADERS['x-variant']}"
+        deployment_type:
+          value: "%{RESPONSE_HEADERS['x-deployment-type']}"
+        user_segment:
+          value: "%{REQUEST_HEADERS['user-type']}"
+        user_tier:
+          value: "%{REQUEST_HEADERS['user-tier']}"
+        region:
+          value: "%{REQUEST_HEADERS['x-region']}"
+        canary_user:
+          value: "%{REQUEST_HEADERS['canary-user']}"
+        feature_flags:
+          value: "%{REQUEST_HEADERS['feature-flags']}"
+  
+  # Custom business metrics for A/B testing analysis
+  - providers:
+    - name: prometheus
+  - overrides:
+    - match:
+        metric: requests_total
+      tagOverrides:
+        conversion_event:
+          value: "%{RESPONSE_HEADERS['x-conversion-event']}"
+        experiment_id:
+          value: "%{REQUEST_HEADERS['x-experiment-id']}"
+        variant_assignment:
+          value: "%{RESPONSE_HEADERS['x-variant-assignment']}"
+        canary_version:
+          value: "%{RESPONSE_HEADERS['x-canary-version']}"
+        ab_test_group:
+          value: "%{RESPONSE_HEADERS['x-ab-test-group']}"
+        
+  # Custom canary metrics
+  - providers:
+    - name: prometheus
+  - overrides:
+    - match:
+        metric: request_duration_milliseconds
+      tagOverrides:
+        canary_stage:
+          value: "%{RESPONSE_HEADERS['x-canary-stage']}"
+        rollout_percentage:
+          value: "%{RESPONSE_HEADERS['x-rollout-percentage']}"
+        
+  # Custom blue/green metrics
+  - providers:
+    - name: prometheus
+  - overrides:
+    - match:
+        metric: request_bytes
+      tagOverrides:
+        environment_color:
+          value: "ACTIVE_ENVIRONMENT"
+        switch_timestamp:
+          value: "%{RESPONSE_HEADERS['x-switch-timestamp']}"
+---
+# Advanced EnvoyFilter for intelligent traffic routing and feature flags
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: SERVICE_NAME-ultimate-filter
+  namespace: NAMESPACE
+  labels:
+    app: SERVICE_NAME
+    strategy: ab-bluegreen-canary-ultimate
+spec:
+  workloadSelector:
+    labels:
+      app: SERVICE_NAME
+  configPatches:
+  # Advanced Lua script for intelligent routing decisions
+  - applyTo: HTTP_FILTER
+    match:
+      context: SIDECAR_INBOUND
+      listener:
+        filterChain:
+          filter:
+            name: "envoy.filters.network.http_connection_manager"
+    patch:
+      operation: INSERT_BEFORE
+      value:
+        name: envoy.filters.http.lua
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
+          inline_code: |
+            function envoy_on_request(request_handle)
+              -- Get user characteristics
+              local user_type = request_handle:headers():get("user-type") or "regular"
+              local user_tier = request_handle:headers():get("user-tier") or "standard"
+              local user_id = request_handle:headers():get("user-id")
+              local region = request_handle:headers():get("x-region") or "unknown"
+              local feature_flags = request_handle:headers():get("feature-flags") or ""
+              
+              -- Initialize routing decision variables
+              local variant = "stable"
+              local deployment_type = "default-routing"
+              local canary_stage = "none"
+              local ab_test_group = "control"
+              local rollout_percentage = "0"
+              
+              -- Canary user detection (highest priority)
+              local canary_user = request_handle:headers():get("canary-user")
+              local canary_token = request_handle:headers():get("x-canary-token")
+              
+              if canary_user == "true" or (canary_token and string.match(canary_token, "^canary%-[a-zA-Z0-9]+$")) then
+                variant = "canary"
+                deployment_type = "canary-user"
+                canary_stage = "user-testing"
+                rollout_percentage = "100"
+              
+              -- Beta users (always experimental)
+              elseif user_type == "beta" then
+                variant = "experimental"
+                deployment_type = "ab-testing"
+                ab_test_group = "beta-experimental"
+              
+              -- Premium users (sophisticated A/B + Canary)
+              elseif user_tier == "premium" then
+                if user_id then
+                  local user_hash = tonumber(user_id) % 100
+                  if user_hash < 10 then
+                    variant = "canary"
+                    deployment_type = "ab-testing-with-canary"
+                    canary_stage = "premium-canary"
+                    rollout_percentage = "10"
+                  elseif user_hash < 30 then
+                    variant = "experimental"
+                    deployment_type = "ab-testing-with-canary"
+                    ab_test_group = "premium-experimental"
+                  else
+                    variant = "stable"
+                    deployment_type = "ab-testing-with-canary"
+                    ab_test_group = "premium-control"
+                  end
+                end
+              
+              -- Feature flag based routing
+              elseif string.find(feature_flags, "new%-feature%-enabled") then
+                variant = "experimental"
+                deployment_type = "feature-flag"
+                ab_test_group = "feature-enabled"
+              
+              -- Geographic canary (specific regions get canary)
+              elseif region == "us-west-2" then
+                if user_id and tonumber(user_id) % 2 == 0 then
+                  variant = "canary"
+                  deployment_type = "geo-canary"
+                  canary_stage = "regional-rollout"
+                  rollout_percentage = "50"
+                end
+              
+              -- Regular users (small percentage gets experimental/canary)
+              elseif user_id then
+                local user_hash = tonumber(user_id) % 1000
+                if user_hash < 20 then  -- 2% canary
+                  variant = "canary"
+                  deployment_type = "canary-percentage"
+                  canary_stage = "gradual-rollout"
+                  rollout_percentage = "2"
+                elseif user_hash < 70 then  -- 5% experimental (7% - 2%)
+                  variant = "experimental"
+                  deployment_type = "ab-testing"
+                  ab_test_group = "regular-experimental"
+                else
+                  ab_test_group = "regular-control"
+                end
+              end
+              
+              -- Add routing headers
+              request_handle:headers():add("x-variant-assignment", variant)
+              request_handle:headers():add("x-deployment-type", deployment_type)
+              request_handle:headers():add("x-canary-stage", canary_stage)
+              request_handle:headers():add("x-ab-test-group", ab_test_group)
+              request_handle:headers():add("x-rollout-percentage", rollout_percentage)
+              
+              -- Add experiment tracking
+              request_handle:headers():add("x-experiment-id", "SERVICE_NAME-ultimate-v1")
+              request_handle:headers():add("x-deployment-strategy", "ab-bluegreen-canary-ultimate")
+              
+              -- Add timestamp for tracking
+              request_handle:headers():add("x-request-timestamp", os.time())
+              
+              -- Log routing decision (for debugging)
+              request_handle:logInfo("Ultimate routing: user=" .. (user_id or "unknown") .. 
+                                   " type=" .. user_type .. 
+                                   " tier=" .. user_tier .. 
+                                   " region=" .. region .. 
+                                   " variant=" .. variant .. 
+                                   " deployment=" .. deployment_type)
+            end
+            
+            function envoy_on_response(response_handle)
+              -- Get routing information from request
+              local variant = response_handle:headers():get("x-variant-assignment") or "stable"
+              local deployment_type = response_handle:headers():get("x-deployment-type") or "default"
+              local canary_stage = response_handle:headers():get("x-canary-stage") or "none"
+              local ab_test_group = response_handle:headers():get("x-ab-test-group") or "control"
+              local rollout_percentage = response_handle:headers():get("x-rollout-percentage") or "0"
+              
+              -- Add response headers for metrics and tracking
+              response_handle:headers():add("x-variant", variant)
+              response_handle:headers():add("x-deployment-type", deployment_type)
+              response_handle:headers():add("x-canary-stage", canary_stage)
+              response_handle:headers():add("x-ab-test-group", ab_test_group)
+              response_handle:headers():add("x-rollout-percentage", rollout_percentage)
+              response_handle:headers():add("x-canary-version", "CANARY_VERSION")
+              response_handle:headers():add("x-switch-timestamp", "SWITCH_TIMESTAMP")
+              
+              -- Track conversion events
+              local status = response_handle:headers():get(":status")
+              local conversion_event = "unknown"
+              
+              if status then
+                local status_code = tonumber(status)
+                if status_code >= 200 and status_code < 300 then
+                  conversion_event = "success"
+                elseif status_code >= 400 and status_code < 500 then
+                  conversion_event = "client_error"
+                elseif status_code >= 500 then
+                  conversion_event = "server_error"
+                else
+                  conversion_event = "other"
+                end
+              end
+              
+              response_handle:headers():add("x-conversion-event", conversion_event)
+              
+              -- Add performance metrics
+              local request_timestamp = response_handle:headers():get("x-request-timestamp")
+              if request_timestamp then
+                local response_time = os.time() - tonumber(request_timestamp)
+                response_handle:headers():add("x-response-time-seconds", tostring(response_time))
+              end
+              
+              -- Remove internal routing headers from client response
+              response_handle:headers():remove("x-variant-assignment")
+              response_handle:headers():remove("x-deployment-type")
+              response_handle:headers():remove("x-canary-stage")
+              response_handle:headers():remove("x-ab-test-group")
+              response_handle:headers():remove("x-rollout-percentage")
+              response_handle:headers():remove("x-request-timestamp")
+            end
+---
+# ServiceMonitor for comprehensive Prometheus metrics
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: SERVICE_NAME-ultimate-metrics
+  namespace: NAMESPACE
+  labels:
+    app: SERVICE_NAME
+    strategy: ab-bluegreen-canary-ultimate
+spec:
+  selector:
+    matchLabels:
+      app: SERVICE_NAME
+  endpoints:
+  - port: http
+    path: /metrics
+    interval: 15s
+    scrapeTimeout: 10s
+    metricRelabelings:
+    - sourceLabels: [__name__]
+      regex: 'istio_.*'
+      targetLabel: __name__
+      replacement: 'ultimate_${1}'
+  - port: http
+    path: /stats/prometheus
+    interval: 15s
+    scrapeTimeout: 10s
+    metricRelabelings:
+    - sourceLabels: [__name__]
+      regex: 'envoy_.*'
+      targetLabel: __name__
+      replacement: 'ultimate_${1}'
+---
+# PrometheusRule for automated rollback based on metrics
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: SERVICE_NAME-ultimate-rollback-rules
+  namespace: NAMESPACE
+  labels:
+    app: SERVICE_NAME
+    strategy: ab-bluegreen-canary-ultimate
+spec:
+  groups:
+  - name: SERVICE_NAME.ultimate.rollback
+    interval: 30s
+    rules:
+    # Canary error rate too high
+    - alert: CanaryHighErrorRate
+      expr: |
+        (
+          rate(istio_requests_total{destination_service_name="SERVICE_NAME",response_code!~"2.*",variant_type="canary"}[5m]) /
+          rate(istio_requests_total{destination_service_name="SERVICE_NAME",variant_type="canary"}[5m])
+        ) > 0.05
+      for: 2m
+      labels:
+        severity: critical
+        service: SERVICE_NAME
+        variant: canary
+        action: rollback
+      annotations:
+        summary: "Canary version has high error rate"
+        description: "Canary version of {{ $labels.destination_service_name }} has error rate of {{ $value | humanizePercentage }}"
+    
+    # Canary latency too high
+    - alert: CanaryHighLatency
+      expr: |
+        histogram_quantile(0.95,
+          rate(istio_request_duration_milliseconds_bucket{destination_service_name="SERVICE_NAME",variant_type="canary"}[5m])
+        ) > 1000
+      for: 2m
+      labels:
+        severity: critical
+        service: SERVICE_NAME
+        variant: canary
+        action: rollback
+      annotations:
+        summary: "Canary version has high latency"
+        description: "Canary version of {{ $labels.destination_service_name }} has P95 latency of {{ $value }}ms"
+    
+    # A/B test conversion rate significantly lower
+    - alert: ABTestLowConversion
+      expr: |
+        (
+          rate(istio_requests_total{destination_service_name="SERVICE_NAME",conversion_event="success",variant_type="experimental"}[10m]) /
+          rate(istio_requests_total{destination_service_name="SERVICE_NAME",variant_type="experimental"}[10m])
+        ) < 0.8 * (
+          rate(istio_requests_total{destination_service_name="SERVICE_NAME",conversion_event="success",variant_type="stable"}[10m]) /
+          rate(istio_requests_total{destination_service_name="SERVICE_NAME",variant_type="stable"}[10m])
+        )
+      for: 5m
+      labels:
+        severity: warning
+        service: SERVICE_NAME
+        variant: experimental
+        action: reduce_traffic
+      annotations:
+        summary: "A/B test experimental variant has low conversion rate"
+        description: "Experimental variant conversion rate is significantly lower than stable variant"
+    
+    # Circuit breaker opened
+    - alert: CircuitBreakerOpen
+      expr: |
+        envoy_cluster_upstream_cx_connect_fail{cluster_name=~".*SERVICE_NAME.*"} > 0
+      for: 1m
+      labels:
+        severity: warning
+        service: SERVICE_NAME
+        action: investigate
+      annotations:
+        summary: "Circuit breaker opened for {{ $labels.cluster_name }}"
+        description: "Circuit breaker has opened, indicating service degradation"

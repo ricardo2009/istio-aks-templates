@@ -1,0 +1,607 @@
+# 🚀 Configuração Unificada: A/B + Blue/Green + Canary + Cross-Cluster
+# Todas as estratégias aplicadas simultaneamente na mesma aplicação
+
+---
+# 🌐 Gateway Principal - Ponto de Entrada Único
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: ecommerce-unified-gateway
+  namespace: ecommerce
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+  - port:
+      number: 80
+      name: http
+      protocol: HTTP
+    hosts:
+    - "ecommerce.local"
+    - "*"
+  - port:
+      number: 443
+      name: https
+      protocol: HTTPS
+    tls:
+      mode: SIMPLE
+      credentialName: ecommerce-tls
+    hosts:
+    - "ecommerce.local"
+
+---
+# 🎯 VirtualService Unificado - Roteamento Inteligente Combinado
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: ecommerce-unified-routing
+  namespace: ecommerce
+spec:
+  hosts:
+  - "ecommerce.local"
+  - "*"
+  gateways:
+  - ecommerce-unified-gateway
+  - mesh # Para comunicação interna
+  http:
+  
+  # 🧪 CANARY DEPLOYMENT - 5% do tráfego para versão canary
+  - match:
+    - headers:
+        canary-user:
+          exact: "true"
+    - headers:
+        x-canary-test:
+          exact: "enabled"
+    - weight: 5  # 5% de todo o tráfego vai para canary
+    route:
+    - destination:
+        host: ecommerce-app
+        subset: canary
+      weight: 100
+    fault:
+      delay:
+        percentage:
+          value: 0.1
+        fixedDelay: 50ms
+    timeout: 10s
+    retries:
+      attempts: 3
+      perTryTimeout: 3s
+      retryOn: 5xx,reset,connect-failure,refused-stream
+  
+  # 🔵 A/B TESTING - Baseado em tipo de usuário e geografia
+  - match:
+    - headers:
+        user-type:
+          exact: "premium"
+        x-ab-test:
+          exact: "group-a"
+    - headers:
+        x-user-segment:
+          exact: "beta-testers"
+    - headers:
+        x-geo-region:
+          regex: "us-.*|eu-.*"  # Usuários US e EU
+    route:
+    - destination:
+        host: ecommerce-app
+        subset: blue  # Versão Blue para grupo A
+      weight: 100
+    headers:
+      request:
+        add:
+          x-ab-group: "A"
+          x-feature-flags: "new-ui,advanced-search"
+  
+  - match:
+    - headers:
+        user-type:
+          exact: "premium"
+        x-ab-test:
+          exact: "group-b"
+    - headers:
+        x-user-segment:
+          exact: "regular-users"
+    route:
+    - destination:
+        host: ecommerce-app
+        subset: green  # Versão Green para grupo B
+      weight: 100
+    headers:
+      request:
+        add:
+          x-ab-group: "B"
+          x-feature-flags: "classic-ui,basic-search"
+  
+  # 🟢 BLUE/GREEN DEPLOYMENT - Baseado em header de deployment
+  - match:
+    - headers:
+        deployment-target:
+          exact: "blue"
+    - headers:
+        x-deployment-strategy:
+          exact: "blue-green"
+    route:
+    - destination:
+        host: ecommerce-app
+        subset: blue
+      weight: 100
+    headers:
+      request:
+        add:
+          x-deployment-env: "blue"
+          x-cluster-target: "primary"
+  
+  - match:
+    - headers:
+        deployment-target:
+          exact: "green"
+    - headers:
+        x-deployment-strategy:
+          exact: "blue-green"
+    route:
+    - destination:
+        host: ecommerce-app
+        subset: green
+      weight: 100
+    headers:
+      request:
+        add:
+          x-deployment-env: "green"
+          x-cluster-target: "secondary"
+  
+  # 🌊 SHADOW TRAFFIC - Tráfego espelhado para testes
+  - match:
+    - headers:
+        x-shadow-test:
+          exact: "enabled"
+    route:
+    - destination:
+        host: ecommerce-app
+        subset: stable
+      weight: 100
+    mirror:
+      host: ecommerce-app
+      subset: canary
+    mirrorPercentage:
+      value: 100
+    headers:
+      request:
+        add:
+          x-shadow-traffic: "true"
+  
+  # 🎲 WEIGHTED ROUTING - Distribuição inteligente baseada em múltiplos fatores
+  - match:
+    - headers:
+        x-user-tier:
+          exact: "enterprise"
+    route:
+    - destination:
+        host: ecommerce-app
+        subset: blue
+      weight: 60  # 60% para Blue (estável)
+    - destination:
+        host: ecommerce-app
+        subset: green
+      weight: 35  # 35% para Green (nova versão)
+    - destination:
+        host: ecommerce-app
+        subset: canary
+      weight: 5   # 5% para Canary (experimental)
+    headers:
+      request:
+        add:
+          x-routing-strategy: "weighted-enterprise"
+  
+  # 🔄 CROSS-CLUSTER ROUTING - Baseado em disponibilidade e latência
+  - match:
+    - headers:
+        x-cross-cluster:
+          exact: "enabled"
+    - headers:
+        x-cluster-preference:
+          exact: "secondary"
+    route:
+    - destination:
+        host: ecommerce-app.ecommerce.svc.cluster.local
+        subset: stable
+      weight: 70
+    - destination:
+        host: ecommerce-app.ecommerce.global  # Cross-cluster endpoint
+        subset: stable
+      weight: 30
+    headers:
+      request:
+        add:
+          x-cross-cluster-routing: "active"
+          x-source-cluster: "primary"
+  
+  # 📱 DEVICE-BASED ROUTING - Baseado no tipo de dispositivo
+  - match:
+    - headers:
+        user-agent:
+          regex: ".*Mobile.*|.*Android.*|.*iPhone.*"
+    route:
+    - destination:
+        host: ecommerce-app
+        subset: mobile-optimized
+      weight: 100
+    headers:
+      request:
+        add:
+          x-device-type: "mobile"
+          x-ui-variant: "mobile-first"
+  
+  # 🕐 TIME-BASED ROUTING - Baseado no horário (para testes graduais)
+  - match:
+    - headers:
+        x-time-based-routing:
+          exact: "enabled"
+    route:
+    - destination:
+        host: ecommerce-app
+        subset: blue
+      weight: 80
+    - destination:
+        host: ecommerce-app
+        subset: green
+      weight: 20
+    headers:
+      request:
+        add:
+          x-time-slot: "business-hours"
+  
+  # 🎯 DEFAULT ROUTING - Fallback para tráfego não classificado
+  - route:
+    - destination:
+        host: ecommerce-app
+        subset: stable
+      weight: 90
+    - destination:
+        host: ecommerce-app
+        subset: canary
+      weight: 10
+    timeout: 15s
+    retries:
+      attempts: 3
+      perTryTimeout: 5s
+      retryOn: 5xx,reset,connect-failure,refused-stream
+    headers:
+      request:
+        add:
+          x-routing-strategy: "default"
+          x-fallback-route: "true"
+
+---
+# 🎯 DestinationRule Unificado - Definição de Subsets e Políticas
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: ecommerce-unified-destination
+  namespace: ecommerce
+spec:
+  host: ecommerce-app
+  trafficPolicy:
+    # 🔄 Load Balancer Configuration
+    loadBalancer:
+      simple: LEAST_CONN
+      consistentHash:
+        httpHeaderName: "x-user-id"
+    
+    # 🛡️ Connection Pool Settings
+    connectionPool:
+      tcp:
+        maxConnections: 100
+        connectTimeout: 30s
+        keepAlive:
+          time: 7200s
+          interval: 75s
+      http:
+        http1MaxPendingRequests: 50
+        http2MaxRequests: 100
+        maxRequestsPerConnection: 10
+        maxRetries: 3
+        idleTimeout: 60s
+        h2UpgradePolicy: UPGRADE
+    
+    # 🚨 Circuit Breaker Configuration
+    outlierDetection:
+      consecutiveGatewayErrors: 3
+      consecutive5xxErrors: 5
+      interval: 30s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+      minHealthPercent: 30
+      splitExternalLocalOriginErrors: true
+    
+    # 🔒 TLS Configuration
+    tls:
+      mode: ISTIO_MUTUAL
+      sni: ecommerce-app.ecommerce.svc.cluster.local
+  
+  # 📊 Subsets - Diferentes versões da aplicação
+  subsets:
+  
+  # 🔵 Blue Environment (Stable Production)
+  - name: blue
+    labels:
+      version: v1.0.0
+      environment: blue
+      deployment-strategy: blue-green
+    trafficPolicy:
+      connectionPool:
+        tcp:
+          maxConnections: 150
+        http:
+          maxRequestsPerConnection: 20
+      outlierDetection:
+        consecutive5xxErrors: 3
+        interval: 20s
+  
+  # 🟢 Green Environment (New Version)
+  - name: green
+    labels:
+      version: v2.0.0
+      environment: green
+      deployment-strategy: blue-green
+    trafficPolicy:
+      connectionPool:
+        tcp:
+          maxConnections: 100
+        http:
+          maxRequestsPerConnection: 15
+      outlierDetection:
+        consecutive5xxErrors: 2
+        interval: 15s
+        baseEjectionTime: 60s
+  
+  # 🧪 Canary Environment (Experimental)
+  - name: canary
+    labels:
+      version: v2.1.0-canary
+      environment: canary
+      deployment-strategy: canary
+    trafficPolicy:
+      connectionPool:
+        tcp:
+          maxConnections: 50
+        http:
+          maxRequestsPerConnection: 5
+      outlierDetection:
+        consecutive5xxErrors: 1
+        interval: 10s
+        baseEjectionTime: 120s
+  
+  # 🏠 Stable Environment (Current Production)
+  - name: stable
+    labels:
+      version: v1.5.0
+      environment: stable
+      deployment-strategy: rolling
+    trafficPolicy:
+      connectionPool:
+        tcp:
+          maxConnections: 200
+        http:
+          maxRequestsPerConnection: 25
+  
+  # 📱 Mobile Optimized
+  - name: mobile-optimized
+    labels:
+      version: v1.5.0-mobile
+      environment: stable
+      optimization: mobile
+    trafficPolicy:
+      connectionPool:
+        tcp:
+          maxConnections: 80
+        http:
+          maxRequestsPerConnection: 12
+
+---
+# 🌐 ServiceEntry para Cross-Cluster Communication
+apiVersion: networking.istio.io/v1beta1
+kind: ServiceEntry
+metadata:
+  name: ecommerce-cross-cluster
+  namespace: ecommerce
+spec:
+  hosts:
+  - ecommerce-app.ecommerce.global
+  location: MESH_EXTERNAL
+  ports:
+  - number: 80
+    name: http
+    protocol: HTTP
+  - number: 443
+    name: https
+    protocol: HTTPS
+  resolution: DNS
+  addresses:
+  - 10.10.2.100  # IP do cluster secundário
+  endpoints:
+  - address: ecommerce-app.ecommerce.svc.cluster.local
+    network: secondary-cluster
+    locality: westus3/secondary
+    ports:
+      http: 80
+      https: 443
+
+---
+# 🔒 PeerAuthentication - mTLS STRICT para toda comunicação
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: ecommerce-unified-mtls
+  namespace: ecommerce
+spec:
+  selector:
+    matchLabels:
+      app: ecommerce-app
+  mtls:
+    mode: STRICT
+
+---
+# 🛡️ AuthorizationPolicy - Controle de acesso granular
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: ecommerce-unified-authz
+  namespace: ecommerce
+spec:
+  selector:
+    matchLabels:
+      app: ecommerce-app
+  rules:
+  
+  # ✅ Permitir tráfego do Gateway
+  - from:
+    - source:
+        principals: ["cluster.local/ns/aks-istio-system/sa/istio-ingressgateway-service-account"]
+    to:
+    - operation:
+        methods: ["GET", "POST", "PUT", "DELETE"]
+  
+  # ✅ Permitir tráfego cross-cluster
+  - from:
+    - source:
+        namespaces: ["ecommerce"]
+    - source:
+        principals: ["cluster.local/ns/ecommerce/sa/ecommerce-app"]
+    to:
+    - operation:
+        methods: ["GET", "POST", "PUT", "DELETE"]
+    when:
+    - key: source.cluster
+      values: ["primary", "secondary"]
+  
+  # ✅ Permitir tráfego de monitoramento
+  - from:
+    - source:
+        principals: ["cluster.local/ns/aks-istio-system/sa/prometheus"]
+    to:
+    - operation:
+        methods: ["GET"]
+        paths: ["/metrics", "/health", "/ready"]
+  
+  # ✅ Permitir tráfego baseado em headers específicos
+  - from:
+    - source:
+        namespaces: ["ecommerce"]
+    to:
+    - operation:
+        methods: ["GET", "POST"]
+    when:
+    - key: request.headers[x-deployment-strategy]
+      values: ["blue-green", "canary", "a-b-test"]
+
+---
+# 📊 Telemetry Configuration - Métricas customizadas
+apiVersion: telemetry.istio.io/v1alpha1
+kind: Telemetry
+metadata:
+  name: ecommerce-unified-metrics
+  namespace: ecommerce
+spec:
+  selector:
+    matchLabels:
+      app: ecommerce-app
+  metrics:
+  
+  # 📈 Métricas de Deployment Strategy
+  - providers:
+    - name: prometheus
+  - overrides:
+    - match:
+        metric: ALL_METRICS
+      tagOverrides:
+        deployment_strategy:
+          value: "%{REQUEST_HEADERS['x-deployment-strategy'] | 'unknown'}"
+        ab_test_group:
+          value: "%{REQUEST_HEADERS['x-ab-group'] | 'none'}"
+        canary_version:
+          value: "%{REQUEST_HEADERS['x-canary-version'] | 'stable'}"
+        cross_cluster:
+          value: "%{REQUEST_HEADERS['x-cross-cluster'] | 'false'}"
+        user_segment:
+          value: "%{REQUEST_HEADERS['x-user-segment'] | 'default'}"
+        device_type:
+          value: "%{REQUEST_HEADERS['x-device-type'] | 'desktop'}"
+        cluster_source:
+          value: "%{REQUEST_HEADERS['x-source-cluster'] | 'unknown'}"
+        cluster_target:
+          value: "%{REQUEST_HEADERS['x-target-cluster'] | 'unknown'}"
+  
+  # 🎯 Custom Business Metrics
+  - providers:
+    - name: prometheus
+  - overrides:
+    - match:
+        metric: requests_total
+      tagOverrides:
+        business_metric:
+          value: "deployment_strategy_requests"
+    - match:
+        metric: request_duration_milliseconds
+      tagOverrides:
+        business_metric:
+          value: "deployment_strategy_latency"
+
+---
+# 🚨 EnvoyFilter - Rate Limiting Avançado
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: ecommerce-unified-ratelimit
+  namespace: ecommerce
+spec:
+  workloadSelector:
+    labels:
+      app: ecommerce-app
+  configPatches:
+  - applyTo: HTTP_FILTER
+    match:
+      context: SIDECAR_INBOUND
+      listener:
+        filterChain:
+          filter:
+            name: "envoy.filters.network.http_connection_manager"
+    patch:
+      operation: INSERT_BEFORE
+      value:
+        name: envoy.filters.http.local_ratelimit
+        typed_config:
+          "@type": type.googleapis.com/udpa.type.v1.TypedStruct
+          type_url: type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit
+          value:
+            stat_prefix: ecommerce_unified_rate_limiter
+            token_bucket:
+              max_tokens: 1000
+              tokens_per_fill: 100
+              fill_interval: 60s
+            filter_enabled:
+              runtime_key: ecommerce_rate_limit_enabled
+              default_value:
+                numerator: 100
+                denominator: HUNDRED
+            filter_enforced:
+              runtime_key: ecommerce_rate_limit_enforced
+              default_value:
+                numerator: 100
+                denominator: HUNDRED
+            response_headers_to_add:
+            - append: false
+              header:
+                key: x-local-rate-limit
+                value: 'true'
+            descriptors:
+            - entries:
+              - key: deployment_strategy
+                value: "%{REQUEST_HEADERS['x-deployment-strategy']:='default'}"
+              - key: user_type
+                value: "%{REQUEST_HEADERS['user-type']:='anonymous'}"
+              token_bucket:
+                max_tokens: 500
+                tokens_per_fill: 50
+                fill_interval: 60s

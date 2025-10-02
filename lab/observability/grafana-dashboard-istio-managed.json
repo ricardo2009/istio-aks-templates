@@ -1,0 +1,489 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "🚀 Istio Managed AKS - Multi-Cluster Ultimate Dashboard",
+    "tags": ["istio-managed", "aks", "multi-cluster", "azure", "prometheus-managed"],
+    "style": "dark",
+    "timezone": "browser",
+    "refresh": "5s",
+    "time": {
+      "from": "now-15m",
+      "to": "now"
+    },
+    "templating": {
+      "list": [
+        {
+          "name": "cluster",
+          "type": "query",
+          "query": "label_values(up{job=\"kubernetes-pods\"}, cluster)",
+          "refresh": 1,
+          "includeAll": true,
+          "multi": true,
+          "current": {"text": "All", "value": ["$__all"]}
+        },
+        {
+          "name": "namespace",
+          "type": "query", 
+          "query": "label_values(up{job=\"kubernetes-pods\"}, namespace)",
+          "refresh": 1,
+          "includeAll": true,
+          "multi": true,
+          "current": {"text": "All", "value": ["$__all"]}
+        }
+      ]
+    },
+    "panels": [
+      {
+        "id": 1,
+        "title": "🎯 Multi-Cluster Service Mesh Overview",
+        "type": "stat",
+        "gridPos": {"h": 4, "w": 24, "x": 0, "y": 0},
+        "targets": [
+          {
+            "expr": "sum(up{job=\"kubernetes-pods\", cluster=~\"$cluster\"})",
+            "legendFormat": "Total Pods"
+          },
+          {
+            "expr": "sum(up{job=\"kubernetes-pods\", cluster=\"aks-istio-primary\"})",
+            "legendFormat": "Primary Cluster Pods"
+          },
+          {
+            "expr": "sum(up{job=\"kubernetes-pods\", cluster=\"aks-istio-secondary\"})",
+            "legendFormat": "Secondary Cluster Pods"
+          },
+          {
+            "expr": "sum(rate(container_cpu_usage_seconds_total{cluster=~\"$cluster\"}[5m]))",
+            "legendFormat": "Total CPU Usage"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "palette-classic"},
+            "unit": "short",
+            "min": 0
+          }
+        },
+        "options": {
+          "colorMode": "background",
+          "graphMode": "area",
+          "justifyMode": "center",
+          "orientation": "horizontal"
+        }
+      },
+      {
+        "id": 2,
+        "title": "🔵 Blue/Green Traffic Distribution (Real Metrics)",
+        "type": "piechart",
+        "gridPos": {"h": 8, "w": 8, "x": 0, "y": 4},
+        "targets": [
+          {
+            "expr": "sum(rate(container_network_receive_bytes_total{namespace=\"ecommerce-unified\", pod=~\".*v1.*\"}[5m]))",
+            "legendFormat": "Blue (v1)"
+          },
+          {
+            "expr": "sum(rate(container_network_receive_bytes_total{namespace=\"ecommerce-unified\", pod=~\".*v2.*\"}[5m]))",
+            "legendFormat": "Green (v2)"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "palette-classic"},
+            "custom": {
+              "hideFrom": {"legend": false, "tooltip": false, "vis": false}
+            }
+          }
+        },
+        "options": {
+          "pieType": "pie",
+          "tooltip": {"mode": "single"},
+          "legend": {"displayMode": "table", "placement": "right"}
+        }
+      },
+      {
+        "id": 3,
+        "title": "🚀 Canary Deployment Progress (Pod Metrics)",
+        "type": "gauge",
+        "gridPos": {"h": 8, "w": 8, "x": 8, "y": 4},
+        "targets": [
+          {
+            "expr": "(sum(up{namespace=\"ecommerce-unified\", pod=~\".*canary.*\"}) / sum(up{namespace=\"ecommerce-unified\"})) * 100",
+            "legendFormat": "Canary %"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "thresholds"},
+            "unit": "percent",
+            "min": 0,
+            "max": 100,
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": 0},
+                {"color": "yellow", "value": 20},
+                {"color": "red", "value": 50}
+              ]
+            }
+          }
+        },
+        "options": {
+          "showThresholdLabels": true,
+          "showThresholdMarkers": true
+        }
+      },
+      {
+        "id": 4,
+        "title": "🌐 Cross-Cluster Network Latency (Real Network Metrics)",
+        "type": "timeseries",
+        "gridPos": {"h": 8, "w": 8, "x": 16, "y": 4},
+        "targets": [
+          {
+            "expr": "avg(rate(container_network_transmit_bytes_total{cluster=\"aks-istio-primary\"}[5m]))",
+            "legendFormat": "Primary Cluster Outbound"
+          },
+          {
+            "expr": "avg(rate(container_network_receive_bytes_total{cluster=\"aks-istio-secondary\"}[5m]))",
+            "legendFormat": "Secondary Cluster Inbound"
+          },
+          {
+            "expr": "avg(rate(container_network_transmit_bytes_total{cluster=\"aks-istio-secondary\"}[5m]))",
+            "legendFormat": "Secondary Cluster Outbound"
+          },
+          {
+            "expr": "avg(rate(container_network_receive_bytes_total{cluster=\"aks-istio-primary\"}[5m]))",
+            "legendFormat": "Primary Cluster Inbound"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "palette-classic"},
+            "unit": "Bps",
+            "min": 0
+          }
+        }
+      },
+      {
+        "id": 5,
+        "title": "📊 Pod Resource Utilization by Strategy",
+        "type": "timeseries",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
+        "targets": [
+          {
+            "expr": "avg(rate(container_cpu_usage_seconds_total{namespace=\"ecommerce-unified\", pod=~\".*v1.*\"}[5m])) * 100",
+            "legendFormat": "Blue (v1) CPU %"
+          },
+          {
+            "expr": "avg(rate(container_cpu_usage_seconds_total{namespace=\"ecommerce-unified\", pod=~\".*v2.*\"}[5m])) * 100",
+            "legendFormat": "Green (v2) CPU %"
+          },
+          {
+            "expr": "avg(rate(container_cpu_usage_seconds_total{namespace=\"ecommerce-unified\", pod=~\".*canary.*\"}[5m])) * 100",
+            "legendFormat": "Canary CPU %"
+          },
+          {
+            "expr": "avg(container_memory_working_set_bytes{namespace=\"ecommerce-unified\", pod=~\".*v1.*\"}) / 1024 / 1024",
+            "legendFormat": "Blue (v1) Memory MB"
+          },
+          {
+            "expr": "avg(container_memory_working_set_bytes{namespace=\"ecommerce-unified\", pod=~\".*v2.*\"}) / 1024 / 1024",
+            "legendFormat": "Green (v2) Memory MB"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "palette-classic"},
+            "unit": "short",
+            "min": 0
+          }
+        }
+      },
+      {
+        "id": 6,
+        "title": "⚡ Application Health & Availability",
+        "type": "timeseries",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 12},
+        "targets": [
+          {
+            "expr": "avg(up{namespace=\"ecommerce-unified\", pod=~\".*v1.*\"})",
+            "legendFormat": "Blue (v1) Availability"
+          },
+          {
+            "expr": "avg(up{namespace=\"ecommerce-unified\", pod=~\".*v2.*\"})",
+            "legendFormat": "Green (v2) Availability"
+          },
+          {
+            "expr": "avg(up{namespace=\"ecommerce-unified\", pod=~\".*canary.*\"})",
+            "legendFormat": "Canary Availability"
+          },
+          {
+            "expr": "avg(kube_pod_container_status_restarts_total{namespace=\"ecommerce-unified\"})",
+            "legendFormat": "Container Restarts"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "palette-classic"},
+            "unit": "short",
+            "min": 0,
+            "max": 1
+          }
+        }
+      },
+      {
+        "id": 7,
+        "title": "🔒 mTLS Certificate Status (Azure Key Vault Integration)",
+        "type": "stat",
+        "gridPos": {"h": 4, "w": 8, "x": 0, "y": 20},
+        "targets": [
+          {
+            "expr": "count(kube_secret_info{namespace=~\".*istio.*\", type=\"kubernetes.io/tls\"})",
+            "legendFormat": "TLS Certificates"
+          },
+          {
+            "expr": "count(kube_secret_info{namespace=~\".*istio.*\", secret=~\".*cacert.*\"})",
+            "legendFormat": "CA Certificates"
+          },
+          {
+            "expr": "time() - kube_secret_created{namespace=~\".*istio.*\", type=\"kubernetes.io/tls\"}",
+            "legendFormat": "Certificate Age (seconds)"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "thresholds"},
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": 0},
+                {"color": "yellow", "value": 2592000},
+                {"color": "red", "value": 7776000}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 8,
+        "title": "🌐 Cross-Cluster Service Discovery",
+        "type": "table",
+        "gridPos": {"h": 4, "w": 8, "x": 8, "y": 20},
+        "targets": [
+          {
+            "expr": "kube_service_info{cluster=~\"$cluster\", namespace=~\"$namespace\"}",
+            "legendFormat": "{{cluster}} - {{namespace}} - {{service}}",
+            "format": "table"
+          }
+        ],
+        "transformations": [
+          {
+            "id": "organize",
+            "options": {
+              "excludeByName": {"Time": true, "__name__": true},
+              "renameByName": {
+                "cluster": "Cluster",
+                "namespace": "Namespace", 
+                "service": "Service",
+                "type": "Type"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": 9,
+        "title": "📈 HPA Scaling Events",
+        "type": "timeseries",
+        "gridPos": {"h": 4, "w": 8, "x": 16, "y": 20},
+        "targets": [
+          {
+            "expr": "kube_horizontalpodautoscaler_status_current_replicas{namespace=\"ecommerce-unified\"}",
+            "legendFormat": "Current Replicas - {{horizontalpodautoscaler}}"
+          },
+          {
+            "expr": "kube_horizontalpodautoscaler_spec_target_metric{namespace=\"ecommerce-unified\"}",
+            "legendFormat": "Target Metric - {{horizontalpodautoscaler}}"
+          },
+          {
+            "expr": "kube_horizontalpodautoscaler_status_desired_replicas{namespace=\"ecommerce-unified\"}",
+            "legendFormat": "Desired Replicas - {{horizontalpodautoscaler}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "palette-classic"},
+            "unit": "short",
+            "min": 0
+          }
+        }
+      },
+      {
+        "id": 10,
+        "title": "🔍 Real-Time Application Logs",
+        "type": "logs",
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 24},
+        "targets": [
+          {
+            "expr": "{namespace=\"ecommerce-unified\"} |= \"version\" |= \"strategy\"",
+            "legendFormat": "Application Logs"
+          },
+          {
+            "expr": "{namespace=\"cross-cluster-demo\"} |= \"CLUSTER\" |= \"API\"",
+            "legendFormat": "Cross-Cluster Logs"
+          },
+          {
+            "expr": "{namespace=~\".*istio.*\"} |= \"certificate\" |= \"tls\"",
+            "legendFormat": "Certificate Logs"
+          }
+        ],
+        "options": {
+          "showTime": true,
+          "showLabels": true,
+          "showCommonLabels": false,
+          "wrapLogMessage": true,
+          "sortOrder": "Descending"
+        }
+      },
+      {
+        "id": 11,
+        "title": "🎯 SLO Compliance Dashboard (Real Metrics)",
+        "type": "table",
+        "gridPos": {"h": 6, "w": 24, "x": 0, "y": 32},
+        "targets": [
+          {
+            "expr": "avg(up{namespace=\"ecommerce-unified\"}) * 100",
+            "legendFormat": "Availability %",
+            "format": "table"
+          },
+          {
+            "expr": "avg(rate(container_cpu_usage_seconds_total{namespace=\"ecommerce-unified\"}[5m])) * 1000",
+            "legendFormat": "Avg Response Time (ms)",
+            "format": "table"
+          },
+          {
+            "expr": "sum(rate(kube_pod_container_status_restarts_total{namespace=\"ecommerce-unified\"}[5m])) * 100",
+            "legendFormat": "Error Rate %",
+            "format": "table"
+          },
+          {
+            "expr": "avg(container_memory_working_set_bytes{namespace=\"ecommerce-unified\"}) / 1024 / 1024",
+            "legendFormat": "Memory Usage (MB)",
+            "format": "table"
+          }
+        ],
+        "transformations": [
+          {
+            "id": "organize",
+            "options": {
+              "excludeByName": {"Time": true},
+              "renameByName": {
+                "Value": "Current Value",
+                "Metric": "SLO Metric"
+              }
+            }
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "thresholds"},
+            "thresholds": {
+              "steps": [
+                {"color": "red", "value": 0},
+                {"color": "yellow", "value": 95},
+                {"color": "green", "value": 99}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 12,
+        "title": "🔐 Azure Key Vault Integration Status",
+        "type": "stat",
+        "gridPos": {"h": 4, "w": 12, "x": 0, "y": 38},
+        "targets": [
+          {
+            "expr": "count(kube_secret_info{namespace=~\".*\", annotation_secrets_store_csi_x_k8s_io_managed=\"true\"})",
+            "legendFormat": "Key Vault Secrets"
+          },
+          {
+            "expr": "count(kube_secret_info{namespace=~\".*istio.*\", annotation_secrets_store_csi_x_k8s_io_managed=\"true\"})",
+            "legendFormat": "Istio Key Vault Secrets"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "thresholds"},
+            "thresholds": {
+              "steps": [
+                {"color": "red", "value": 0},
+                {"color": "yellow", "value": 1},
+                {"color": "green", "value": 3}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 13,
+        "title": "📊 Multi-Cluster Resource Distribution",
+        "type": "bargauge",
+        "gridPos": {"h": 4, "w": 12, "x": 12, "y": 38},
+        "targets": [
+          {
+            "expr": "sum(kube_node_status_allocatable{resource=\"cpu\", cluster=\"aks-istio-primary\"})",
+            "legendFormat": "Primary CPU Cores"
+          },
+          {
+            "expr": "sum(kube_node_status_allocatable{resource=\"cpu\", cluster=\"aks-istio-secondary\"})",
+            "legendFormat": "Secondary CPU Cores"
+          },
+          {
+            "expr": "sum(kube_node_status_allocatable{resource=\"memory\", cluster=\"aks-istio-primary\"}) / 1024 / 1024 / 1024",
+            "legendFormat": "Primary Memory GB"
+          },
+          {
+            "expr": "sum(kube_node_status_allocatable{resource=\"memory\", cluster=\"aks-istio-secondary\"}) / 1024 / 1024 / 1024",
+            "legendFormat": "Secondary Memory GB"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "continuous-GrYlRd"},
+            "unit": "short",
+            "min": 0
+          }
+        },
+        "options": {
+          "orientation": "horizontal",
+          "displayMode": "gradient"
+        }
+      }
+    ],
+    "annotations": {
+      "list": [
+        {
+          "name": "Pod Deployments",
+          "datasource": "Prometheus",
+          "expr": "changes(kube_pod_created{namespace=\"ecommerce-unified\"}[1m]) > 0",
+          "titleFormat": "Pod Deployment: {{pod}}",
+          "textFormat": "New pod deployed in {{namespace}}",
+          "iconColor": "green"
+        },
+        {
+          "name": "Certificate Renewals",
+          "datasource": "Prometheus", 
+          "expr": "changes(kube_secret_created{namespace=~\".*istio.*\", type=\"kubernetes.io/tls\"}[1m]) > 0",
+          "titleFormat": "Certificate Renewal",
+          "textFormat": "TLS certificate renewed",
+          "iconColor": "blue"
+        },
+        {
+          "name": "HPA Scaling Events",
+          "datasource": "Prometheus",
+          "expr": "changes(kube_horizontalpodautoscaler_status_current_replicas{namespace=\"ecommerce-unified\"}[1m]) > 0",
+          "titleFormat": "HPA Scaling: {{horizontalpodautoscaler}}",
+          "textFormat": "Horizontal Pod Autoscaler triggered",
+          "iconColor": "orange"
+        }
+      ]
+    }
+  }
+}

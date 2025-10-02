@@ -1,0 +1,594 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cross-cluster-demo
+  labels:
+    istio-injection: enabled
+---
+# API do Cluster 1 - Frontend API Gateway
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend-api
+  namespace: cross-cluster-demo
+  labels:
+    app: frontend-api
+    version: v1
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: frontend-api
+      version: v1
+  template:
+    metadata:
+      labels:
+        app: frontend-api
+        version: v1
+        cluster: primary
+    spec:
+      containers:
+      - name: frontend-api
+        image: node:18-alpine
+        ports:
+        - containerPort: 3000
+        env:
+        - name: CLUSTER_NAME
+          value: "aks-istio-primary"
+        - name: API_VERSION
+          value: "v1.0.0"
+        - name: BACKEND_API_URL
+          value: "http://backend-api.cross-cluster-demo.svc.cluster.local:3001"
+        - name: CROSS_CLUSTER_API_URL
+          value: "http://payment-api.cross-cluster-demo.global:3002"
+        command: ["/bin/sh"]
+        args:
+        - -c
+        - |
+          mkdir -p /app
+          cat > /app/server.js << 'EOF'
+          const http = require('http');
+          const url = require('url');
+          
+          const CLUSTER_NAME = process.env.CLUSTER_NAME || 'unknown';
+          const API_VERSION = process.env.API_VERSION || 'v1.0.0';
+          const BACKEND_API_URL = process.env.BACKEND_API_URL;
+          const CROSS_CLUSTER_API_URL = process.env.CROSS_CLUSTER_API_URL;
+          
+          // Função para fazer requisições HTTP
+          function makeRequest(targetUrl, timeout = 5000) {
+            return new Promise((resolve, reject) => {
+              const startTime = Date.now();
+              const req = http.get(targetUrl, { timeout }, (res) => {
+                let data = '';
+                res.on('data', chunk => data += chunk);
+                res.on('end', () => {
+                  const endTime = Date.now();
+                  resolve({
+                    statusCode: res.statusCode,
+                    data: data,
+                    responseTime: endTime - startTime,
+                    headers: res.headers
+                  });
+                });
+              });
+              
+              req.on('timeout', () => {
+                req.destroy();
+                reject(new Error('Request timeout'));
+              });
+              
+              req.on('error', (err) => {
+                reject(err);
+              });
+            });
+          }
+          
+          const server = http.createServer(async (req, res) => {
+            const startTime = Date.now();
+            const requestId = req.headers['x-request-id'] || Math.random().toString(36).substring(7);
+            const parsedUrl = url.parse(req.url, true);
+            const pathname = parsedUrl.pathname;
+            
+            // Headers de resposta
+            res.setHeader('Content-Type', 'application/json');
+            res.setHeader('X-Cluster', CLUSTER_NAME);
+            res.setHeader('X-API-Version', API_VERSION);
+            res.setHeader('X-Request-ID', requestId);
+            res.setHeader('X-Pod-Name', process.env.HOSTNAME || 'unknown');
+            res.setHeader('Access-Control-Allow-Origin', '*');
+            
+            console.log(`[${new Date().toISOString()}] 🌐 CLUSTER-1 ${req.method} ${pathname} - RequestID: ${requestId}`);
+            
+            try {
+              if (pathname === '/') {
+                const response = {
+                  service: "Frontend API Gateway",
+                  cluster: CLUSTER_NAME,
+                  version: API_VERSION,
+                  podName: process.env.HOSTNAME || 'unknown',
+                  timestamp: new Date().toISOString(),
+                  requestId: requestId,
+                  endpoints: [
+                    "/health",
+                    "/local-call",
+                    "/cross-cluster-call", 
+                    "/performance-test",
+                    "/metrics"
+                  ],
+                  responseTime: Date.now() - startTime
+                };
+                res.writeHead(200);
+                res.end(JSON.stringify(response, null, 2));
+                
+              } else if (pathname === '/health') {
+                const response = {
+                  status: "✅ healthy",
+                  cluster: CLUSTER_NAME,
+                  version: API_VERSION,
+                  podName: process.env.HOSTNAME || 'unknown',
+                  timestamp: new Date().toISOString(),
+                  uptime: process.uptime(),
+                  memory: process.memoryUsage(),
+                  responseTime: Date.now() - startTime
+                };
+                res.writeHead(200);
+                res.end(JSON.stringify(response, null, 2));
+                
+              } else if (pathname === '/local-call') {
+                console.log(`[${new Date().toISOString()}] 🔄 Fazendo chamada local para backend...`);
+                
+                try {
+                  const backendResponse = await makeRequest(BACKEND_API_URL + '/process');
+                  console.log(`[${new Date().toISOString()}] ✅ Resposta local recebida em ${backendResponse.responseTime}ms`);
+                  
+                  const response = {
+                    type: "local-call",
+                    source: {
+                      cluster: CLUSTER_NAME,
+                      service: "frontend-api",
+                      podName: process.env.HOSTNAME || 'unknown'
+                    },
+                    target: {
+                      cluster: CLUSTER_NAME,
+                      service: "backend-api",
+                      url: BACKEND_API_URL + '/process'
+                    },
+                    result: {
+                      success: true,
+                      statusCode: backendResponse.statusCode,
+                      responseTime: backendResponse.responseTime,
+                      data: JSON.parse(backendResponse.data || '{}')
+                    },
+                    totalResponseTime: Date.now() - startTime,
+                    timestamp: new Date().toISOString()
+                  };
+                  res.writeHead(200);
+                  res.end(JSON.stringify(response, null, 2));
+                  
+                } catch (error) {
+                  console.log(`[${new Date().toISOString()}] ❌ Erro na chamada local: ${error.message}`);
+                  
+                  const response = {
+                    type: "local-call",
+                    source: {
+                      cluster: CLUSTER_NAME,
+                      service: "frontend-api"
+                    },
+                    target: {
+                      cluster: CLUSTER_NAME,
+                      service: "backend-api",
+                      url: BACKEND_API_URL + '/process'
+                    },
+                    result: {
+                      success: false,
+                      error: error.message,
+                      responseTime: Date.now() - startTime
+                    },
+                    timestamp: new Date().toISOString()
+                  };
+                  res.writeHead(500);
+                  res.end(JSON.stringify(response, null, 2));
+                }
+                
+              } else if (pathname === '/cross-cluster-call') {
+                console.log(`[${new Date().toISOString()}] 🌐 Fazendo chamada CROSS-CLUSTER para payment API...`);
+                
+                try {
+                  const crossClusterResponse = await makeRequest(CROSS_CLUSTER_API_URL + '/payment', 10000);
+                  console.log(`[${new Date().toISOString()}] ✅ Resposta cross-cluster recebida em ${crossClusterResponse.responseTime}ms`);
+                  
+                  const response = {
+                    type: "cross-cluster-call",
+                    source: {
+                      cluster: CLUSTER_NAME,
+                      service: "frontend-api",
+                      podName: process.env.HOSTNAME || 'unknown'
+                    },
+                    target: {
+                      cluster: "aks-istio-secondary",
+                      service: "payment-api",
+                      url: CROSS_CLUSTER_API_URL + '/payment'
+                    },
+                    result: {
+                      success: true,
+                      statusCode: crossClusterResponse.statusCode,
+                      responseTime: crossClusterResponse.responseTime,
+                      data: JSON.parse(crossClusterResponse.data || '{}')
+                    },
+                    istioHeaders: {
+                      'x-forwarded-for': crossClusterResponse.headers['x-forwarded-for'],
+                      'x-request-id': crossClusterResponse.headers['x-request-id'],
+                      'x-b3-traceid': crossClusterResponse.headers['x-b3-traceid']
+                    },
+                    totalResponseTime: Date.now() - startTime,
+                    timestamp: new Date().toISOString()
+                  };
+                  res.writeHead(200);
+                  res.end(JSON.stringify(response, null, 2));
+                  
+                } catch (error) {
+                  console.log(`[${new Date().toISOString()}] ❌ Erro na chamada cross-cluster: ${error.message}`);
+                  
+                  const response = {
+                    type: "cross-cluster-call",
+                    source: {
+                      cluster: CLUSTER_NAME,
+                      service: "frontend-api"
+                    },
+                    target: {
+                      cluster: "aks-istio-secondary",
+                      service: "payment-api",
+                      url: CROSS_CLUSTER_API_URL + '/payment'
+                    },
+                    result: {
+                      success: false,
+                      error: error.message,
+                      responseTime: Date.now() - startTime
+                    },
+                    timestamp: new Date().toISOString()
+                  };
+                  res.writeHead(500);
+                  res.end(JSON.stringify(response, null, 2));
+                }
+                
+              } else if (pathname === '/performance-test') {
+                const iterations = parseInt(parsedUrl.query.iterations) || 10;
+                console.log(`[${new Date().toISOString()}] 🚀 Iniciando teste de performance com ${iterations} iterações...`);
+                
+                const results = {
+                  local: [],
+                  crossCluster: []
+                };
+                
+                // Teste local
+                for (let i = 0; i < iterations; i++) {
+                  try {
+                    const localResult = await makeRequest(BACKEND_API_URL + '/process');
+                    results.local.push({
+                      iteration: i + 1,
+                      responseTime: localResult.responseTime,
+                      success: true
+                    });
+                    console.log(`[${new Date().toISOString()}] 📊 Local ${i+1}/${iterations}: ${localResult.responseTime}ms`);
+                  } catch (error) {
+                    results.local.push({
+                      iteration: i + 1,
+                      responseTime: -1,
+                      success: false,
+                      error: error.message
+                    });
+                  }
+                }
+                
+                // Teste cross-cluster
+                for (let i = 0; i < iterations; i++) {
+                  try {
+                    const crossResult = await makeRequest(CROSS_CLUSTER_API_URL + '/payment', 10000);
+                    results.crossCluster.push({
+                      iteration: i + 1,
+                      responseTime: crossResult.responseTime,
+                      success: true
+                    });
+                    console.log(`[${new Date().toISOString()}] 🌐 Cross-cluster ${i+1}/${iterations}: ${crossResult.responseTime}ms`);
+                  } catch (error) {
+                    results.crossCluster.push({
+                      iteration: i + 1,
+                      responseTime: -1,
+                      success: false,
+                      error: error.message
+                    });
+                  }
+                }
+                
+                // Calcular estatísticas
+                const localTimes = results.local.filter(r => r.success).map(r => r.responseTime);
+                const crossTimes = results.crossCluster.filter(r => r.success).map(r => r.responseTime);
+                
+                const response = {
+                  type: "performance-test",
+                  cluster: CLUSTER_NAME,
+                  iterations: iterations,
+                  results: results,
+                  statistics: {
+                    local: {
+                      avg: localTimes.length > 0 ? Math.round(localTimes.reduce((a, b) => a + b, 0) / localTimes.length) : 0,
+                      min: localTimes.length > 0 ? Math.min(...localTimes) : 0,
+                      max: localTimes.length > 0 ? Math.max(...localTimes) : 0,
+                      successRate: `${Math.round((localTimes.length / iterations) * 100)}%`
+                    },
+                    crossCluster: {
+                      avg: crossTimes.length > 0 ? Math.round(crossTimes.reduce((a, b) => a + b, 0) / crossTimes.length) : 0,
+                      min: crossTimes.length > 0 ? Math.min(...crossTimes) : 0,
+                      max: crossTimes.length > 0 ? Math.max(...crossTimes) : 0,
+                      successRate: `${Math.round((crossTimes.length / iterations) * 100)}%`
+                    }
+                  },
+                  totalResponseTime: Date.now() - startTime,
+                  timestamp: new Date().toISOString()
+                };
+                
+                console.log(`[${new Date().toISOString()}] 📊 Teste concluído - Local: ${response.statistics.local.avg}ms, Cross-cluster: ${response.statistics.crossCluster.avg}ms`);
+                
+                res.writeHead(200);
+                res.end(JSON.stringify(response, null, 2));
+                
+              } else if (pathname === '/metrics') {
+                const response = {
+                  service: "frontend-api",
+                  cluster: CLUSTER_NAME,
+                  version: API_VERSION,
+                  podName: process.env.HOSTNAME || 'unknown',
+                  metrics: {
+                    uptime: process.uptime(),
+                    memory: process.memoryUsage(),
+                    cpu: process.cpuUsage(),
+                    timestamp: new Date().toISOString()
+                  },
+                  responseTime: Date.now() - startTime
+                };
+                res.writeHead(200);
+                res.end(JSON.stringify(response, null, 2));
+                
+              } else {
+                const response = {
+                  error: "❌ Not Found",
+                  cluster: CLUSTER_NAME,
+                  service: "frontend-api",
+                  availableEndpoints: ["/", "/health", "/local-call", "/cross-cluster-call", "/performance-test", "/metrics"],
+                  responseTime: Date.now() - startTime
+                };
+                res.writeHead(404);
+                res.end(JSON.stringify(response, null, 2));
+              }
+              
+            } catch (error) {
+              console.error(`[${new Date().toISOString()}] 💥 Erro interno: ${error.message}`);
+              const response = {
+                error: "💥 Internal Server Error",
+                message: error.message,
+                cluster: CLUSTER_NAME,
+                service: "frontend-api",
+                responseTime: Date.now() - startTime
+              };
+              res.writeHead(500);
+              res.end(JSON.stringify(response, null, 2));
+            }
+          });
+          
+          const PORT = 3000;
+          server.listen(PORT, '0.0.0.0', () => {
+            console.log(`[${new Date().toISOString()}] 🚀 Frontend API rodando no cluster ${CLUSTER_NAME} na porta ${PORT}`);
+            console.log(`[${new Date().toISOString()}] 🔗 Backend URL: ${BACKEND_API_URL}`);
+            console.log(`[${new Date().toISOString()}] 🌐 Cross-cluster URL: ${CROSS_CLUSTER_API_URL}`);
+          });
+          EOF
+          
+          cd /app && node server.js
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+---
+# Backend API local no Cluster 1
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-api
+  namespace: cross-cluster-demo
+  labels:
+    app: backend-api
+    version: v1
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: backend-api
+      version: v1
+  template:
+    metadata:
+      labels:
+        app: backend-api
+        version: v1
+        cluster: primary
+    spec:
+      containers:
+      - name: backend-api
+        image: node:18-alpine
+        ports:
+        - containerPort: 3001
+        env:
+        - name: CLUSTER_NAME
+          value: "aks-istio-primary"
+        - name: API_VERSION
+          value: "v1.0.0"
+        command: ["/bin/sh"]
+        args:
+        - -c
+        - |
+          mkdir -p /app
+          cat > /app/server.js << 'EOF'
+          const http = require('http');
+          const url = require('url');
+          
+          const CLUSTER_NAME = process.env.CLUSTER_NAME || 'unknown';
+          const API_VERSION = process.env.API_VERSION || 'v1.0.0';
+          
+          const server = http.createServer(async (req, res) => {
+            const startTime = Date.now();
+            const requestId = req.headers['x-request-id'] || Math.random().toString(36).substring(7);
+            const parsedUrl = url.parse(req.url, true);
+            const pathname = parsedUrl.pathname;
+            
+            res.setHeader('Content-Type', 'application/json');
+            res.setHeader('X-Cluster', CLUSTER_NAME);
+            res.setHeader('X-API-Version', API_VERSION);
+            res.setHeader('X-Request-ID', requestId);
+            res.setHeader('X-Pod-Name', process.env.HOSTNAME || 'unknown');
+            res.setHeader('Access-Control-Allow-Origin', '*');
+            
+            console.log(`[${new Date().toISOString()}] 🔧 BACKEND-CLUSTER-1 ${req.method} ${pathname} - RequestID: ${requestId}`);
+            
+            if (pathname === '/process') {
+              // Simular processamento
+              const processingTime = Math.floor(Math.random() * 100) + 50; // 50-150ms
+              await new Promise(resolve => setTimeout(resolve, processingTime));
+              
+              const response = {
+                service: "Backend API",
+                cluster: CLUSTER_NAME,
+                version: API_VERSION,
+                podName: process.env.HOSTNAME || 'unknown',
+                processingTime: processingTime,
+                data: {
+                  processed: true,
+                  timestamp: new Date().toISOString(),
+                  requestId: requestId
+                },
+                responseTime: Date.now() - startTime
+              };
+              
+              console.log(`[${new Date().toISOString()}] ✅ Processamento concluído em ${processingTime}ms`);
+              
+              res.writeHead(200);
+              res.end(JSON.stringify(response, null, 2));
+            } else {
+              const response = {
+                error: "❌ Not Found",
+                cluster: CLUSTER_NAME,
+                service: "backend-api",
+                availableEndpoints: ["/process"],
+                responseTime: Date.now() - startTime
+              };
+              res.writeHead(404);
+              res.end(JSON.stringify(response, null, 2));
+            }
+          });
+          
+          const PORT = 3001;
+          server.listen(PORT, '0.0.0.0', () => {
+            console.log(`[${new Date().toISOString()}] 🔧 Backend API rodando no cluster ${CLUSTER_NAME} na porta ${PORT}`);
+          });
+          EOF
+          
+          cd /app && node server.js
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+---
+# Services
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend-api
+  namespace: cross-cluster-demo
+  labels:
+    app: frontend-api
+spec:
+  ports:
+  - port: 3000
+    targetPort: 3000
+    name: http
+  selector:
+    app: frontend-api
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-api
+  namespace: cross-cluster-demo
+  labels:
+    app: backend-api
+spec:
+  ports:
+  - port: 3001
+    targetPort: 3001
+    name: http
+  selector:
+    app: backend-api
+---
+# HPA para escalabilidade automática
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: frontend-api-hpa
+  namespace: cross-cluster-demo
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: frontend-api
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: backend-api-hpa
+  namespace: cross-cluster-demo
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: backend-api
+  minReplicas: 2
+  maxReplicas: 8
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70

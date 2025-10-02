@@ -1,0 +1,559 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ecommerce-unified
+  labels:
+    istio-injection: enabled
+---
+# Aplicação E-commerce com múltiplas versões para demonstrar todas as estratégias
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ecommerce-app-v1
+  namespace: ecommerce-unified
+  labels:
+    app: ecommerce-app
+    version: v1
+    strategy: stable
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: ecommerce-app
+      version: v1
+  template:
+    metadata:
+      labels:
+        app: ecommerce-app
+        version: v1
+        strategy: stable
+        environment: blue
+        segment: regular
+    spec:
+      containers:
+      - name: ecommerce
+        image: node:18-alpine
+        ports:
+        - containerPort: 3000
+        env:
+        - name: APP_VERSION
+          value: "v1.0.0"
+        - name: DEPLOYMENT_STRATEGY
+          value: "stable"
+        - name: ENVIRONMENT_COLOR
+          value: "blue"
+        - name: USER_SEGMENT
+          value: "regular"
+        - name: FEATURE_FLAGS
+          value: "old_checkout,basic_ui"
+        command: ["/bin/sh"]
+        args:
+        - -c
+        - |
+          cat > /app/server.js << 'EOF'
+          const http = require('http');
+          const url = require('url');
+          
+          const APP_VERSION = process.env.APP_VERSION || 'v1.0.0';
+          const DEPLOYMENT_STRATEGY = process.env.DEPLOYMENT_STRATEGY || 'stable';
+          const ENVIRONMENT_COLOR = process.env.ENVIRONMENT_COLOR || 'blue';
+          const USER_SEGMENT = process.env.USER_SEGMENT || 'regular';
+          const FEATURE_FLAGS = process.env.FEATURE_FLAGS ? process.env.FEATURE_FLAGS.split(',') : [];
+          
+          const server = http.createServer(async (req, res) => {
+            const startTime = Date.now();
+            const requestId = req.headers['x-request-id'] || Math.random().toString(36).substring(7);
+            const userType = req.headers['x-user-type'] || 'regular';
+            const userLocation = req.headers['x-user-location'] || 'us';
+            const deviceType = req.headers['x-device-type'] || 'desktop';
+            
+            // Headers de resposta
+            res.setHeader('Content-Type', 'application/json');
+            res.setHeader('X-App-Version', APP_VERSION);
+            res.setHeader('X-Deployment-Strategy', DEPLOYMENT_STRATEGY);
+            res.setHeader('X-Environment-Color', ENVIRONMENT_COLOR);
+            res.setHeader('X-User-Segment', USER_SEGMENT);
+            res.setHeader('X-Request-ID', requestId);
+            res.setHeader('Access-Control-Allow-Origin', '*');
+            
+            const parsedUrl = url.parse(req.url, true);
+            const pathname = parsedUrl.pathname;
+            
+            console.log(`[${new Date().toISOString()}] ${req.method} ${pathname} - Version: ${APP_VERSION}, Strategy: ${DEPLOYMENT_STRATEGY}, User: ${userType}, Device: ${deviceType}`);
+            
+            try {
+              if (pathname === '/') {
+                const response = {
+                  title: "E-commerce Platform - Unified Strategies Demo",
+                  version: APP_VERSION,
+                  deploymentStrategy: DEPLOYMENT_STRATEGY,
+                  environment: ENVIRONMENT_COLOR,
+                  userSegment: USER_SEGMENT,
+                  featureFlags: FEATURE_FLAGS,
+                  timestamp: new Date().toISOString(),
+                  requestId: requestId,
+                  userContext: {
+                    type: userType,
+                    location: userLocation,
+                    device: deviceType
+                  },
+                  strategiesActive: {
+                    blueGreen: ENVIRONMENT_COLOR === 'blue' ? 'active' : 'inactive',
+                    abTesting: USER_SEGMENT !== 'regular' ? 'active' : 'inactive',
+                    canaryDeployment: DEPLOYMENT_STRATEGY === 'canary' ? 'active' : 'inactive'
+                  },
+                  responseTime: Date.now() - startTime
+                };
+                res.writeHead(200);
+                res.end(JSON.stringify(response, null, 2));
+                
+              } else if (pathname === '/health') {
+                const response = {
+                  status: 'healthy',
+                  version: APP_VERSION,
+                  strategy: DEPLOYMENT_STRATEGY,
+                  environment: ENVIRONMENT_COLOR,
+                  timestamp: new Date().toISOString(),
+                  responseTime: Date.now() - startTime
+                };
+                res.writeHead(200);
+                res.end(JSON.stringify(response, null, 2));
+                
+              } else if (pathname === '/checkout') {
+                // Simular diferentes comportamentos baseados na versão
+                const processingTime = DEPLOYMENT_STRATEGY === 'canary' ? 200 : 100;
+                await new Promise(resolve => setTimeout(resolve, processingTime));
+                
+                const response = {
+                  checkout: {
+                    version: APP_VERSION,
+                    strategy: DEPLOYMENT_STRATEGY,
+                    environment: ENVIRONMENT_COLOR,
+                    features: FEATURE_FLAGS.includes('new_checkout') ? ['express_checkout', 'one_click_buy'] : ['standard_checkout'],
+                    processingTime: processingTime,
+                    success: Math.random() > 0.1, // 90% success rate
+                    timestamp: new Date().toISOString()
+                  },
+                  responseTime: Date.now() - startTime
+                };
+                res.writeHead(200);
+                res.end(JSON.stringify(response, null, 2));
+                
+              } else if (pathname === '/products') {
+                const response = {
+                  products: [
+                    { id: 1, name: "Laptop Pro", price: 1299.99, version: APP_VERSION },
+                    { id: 2, name: "Smartphone X", price: 899.99, version: APP_VERSION },
+                    { id: 3, name: "Tablet Ultra", price: 599.99, version: APP_VERSION }
+                  ],
+                  metadata: {
+                    version: APP_VERSION,
+                    strategy: DEPLOYMENT_STRATEGY,
+                    environment: ENVIRONMENT_COLOR,
+                    userSegment: USER_SEGMENT,
+                    recommendationEngine: FEATURE_FLAGS.includes('ai_recommendations') ? 'AI-powered' : 'basic'
+                  },
+                  responseTime: Date.now() - startTime
+                };
+                res.writeHead(200);
+                res.end(JSON.stringify(response, null, 2));
+                
+              } else {
+                const response = {
+                  error: 'Not Found',
+                  version: APP_VERSION,
+                  strategy: DEPLOYMENT_STRATEGY,
+                  availableEndpoints: ['/', '/health', '/checkout', '/products'],
+                  responseTime: Date.now() - startTime
+                };
+                res.writeHead(404);
+                res.end(JSON.stringify(response, null, 2));
+              }
+              
+            } catch (error) {
+              console.error(`[${new Date().toISOString()}] Erro: ${error.message}`);
+              const response = {
+                error: 'Internal Server Error',
+                message: error.message,
+                version: APP_VERSION,
+                strategy: DEPLOYMENT_STRATEGY,
+                responseTime: Date.now() - startTime
+              };
+              res.writeHead(500);
+              res.end(JSON.stringify(response, null, 2));
+            }
+          });
+          
+          const PORT = 3000;
+          server.listen(PORT, '0.0.0.0', () => {
+            console.log(`[${new Date().toISOString()}] E-commerce App ${APP_VERSION} rodando na porta ${PORT}`);
+            console.log(`[${new Date().toISOString()}] Strategy: ${DEPLOYMENT_STRATEGY}, Environment: ${ENVIRONMENT_COLOR}, Segment: ${USER_SEGMENT}`);
+          });
+          EOF
+          
+          cd /app && node server.js
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+---
+# Versão v2 - Green Environment + A/B Test Group A + Canary
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ecommerce-app-v2
+  namespace: ecommerce-unified
+  labels:
+    app: ecommerce-app
+    version: v2
+    strategy: canary
+spec:
+  replicas: 1  # Começar com 1 réplica para canary
+  selector:
+    matchLabels:
+      app: ecommerce-app
+      version: v2
+  template:
+    metadata:
+      labels:
+        app: ecommerce-app
+        version: v2
+        strategy: canary
+        environment: green
+        segment: premium
+    spec:
+      containers:
+      - name: ecommerce
+        image: node:18-alpine
+        ports:
+        - containerPort: 3000
+        env:
+        - name: APP_VERSION
+          value: "v2.0.0"
+        - name: DEPLOYMENT_STRATEGY
+          value: "canary"
+        - name: ENVIRONMENT_COLOR
+          value: "green"
+        - name: USER_SEGMENT
+          value: "premium"
+        - name: FEATURE_FLAGS
+          value: "new_checkout,ai_recommendations,premium_ui"
+        command: ["/bin/sh"]
+        args:
+        - -c
+        - |
+          cat > /app/server.js << 'EOF'
+          const http = require('http');
+          const url = require('url');
+          
+          const APP_VERSION = process.env.APP_VERSION || 'v2.0.0';
+          const DEPLOYMENT_STRATEGY = process.env.DEPLOYMENT_STRATEGY || 'canary';
+          const ENVIRONMENT_COLOR = process.env.ENVIRONMENT_COLOR || 'green';
+          const USER_SEGMENT = process.env.USER_SEGMENT || 'premium';
+          const FEATURE_FLAGS = process.env.FEATURE_FLAGS ? process.env.FEATURE_FLAGS.split(',') : [];
+          
+          const server = http.createServer(async (req, res) => {
+            const startTime = Date.now();
+            const requestId = req.headers['x-request-id'] || Math.random().toString(36).substring(7);
+            const userType = req.headers['x-user-type'] || 'premium';
+            const userLocation = req.headers['x-user-location'] || 'us';
+            const deviceType = req.headers['x-device-type'] || 'desktop';
+            
+            // Headers de resposta
+            res.setHeader('Content-Type', 'application/json');
+            res.setHeader('X-App-Version', APP_VERSION);
+            res.setHeader('X-Deployment-Strategy', DEPLOYMENT_STRATEGY);
+            res.setHeader('X-Environment-Color', ENVIRONMENT_COLOR);
+            res.setHeader('X-User-Segment', USER_SEGMENT);
+            res.setHeader('X-Request-ID', requestId);
+            res.setHeader('Access-Control-Allow-Origin', '*');
+            
+            const parsedUrl = url.parse(req.url, true);
+            const pathname = parsedUrl.pathname;
+            
+            console.log(`[${new Date().toISOString()}] ${req.method} ${pathname} - Version: ${APP_VERSION}, Strategy: ${DEPLOYMENT_STRATEGY}, User: ${userType}, Device: ${deviceType}`);
+            
+            try {
+              if (pathname === '/') {
+                const response = {
+                  title: "E-commerce Platform v2.0 - Premium Experience",
+                  version: APP_VERSION,
+                  deploymentStrategy: DEPLOYMENT_STRATEGY,
+                  environment: ENVIRONMENT_COLOR,
+                  userSegment: USER_SEGMENT,
+                  featureFlags: FEATURE_FLAGS,
+                  timestamp: new Date().toISOString(),
+                  requestId: requestId,
+                  userContext: {
+                    type: userType,
+                    location: userLocation,
+                    device: deviceType
+                  },
+                  strategiesActive: {
+                    blueGreen: ENVIRONMENT_COLOR === 'green' ? 'active' : 'inactive',
+                    abTesting: USER_SEGMENT === 'premium' ? 'active' : 'inactive',
+                    canaryDeployment: DEPLOYMENT_STRATEGY === 'canary' ? 'active' : 'inactive'
+                  },
+                  newFeatures: [
+                    'AI-powered recommendations',
+                    'Express checkout',
+                    'Premium UI theme',
+                    'Advanced analytics'
+                  ],
+                  responseTime: Date.now() - startTime
+                };
+                res.writeHead(200);
+                res.end(JSON.stringify(response, null, 2));
+                
+              } else if (pathname === '/health') {
+                // Simular ocasionalmente uma resposta mais lenta na versão canary
+                if (Math.random() > 0.9) {
+                  await new Promise(resolve => setTimeout(resolve, 500));
+                }
+                
+                const response = {
+                  status: 'healthy',
+                  version: APP_VERSION,
+                  strategy: DEPLOYMENT_STRATEGY,
+                  environment: ENVIRONMENT_COLOR,
+                  canaryMetrics: {
+                    successRate: '98.5%',
+                    avgResponseTime: '150ms',
+                    errorRate: '1.5%'
+                  },
+                  timestamp: new Date().toISOString(),
+                  responseTime: Date.now() - startTime
+                };
+                res.writeHead(200);
+                res.end(JSON.stringify(response, null, 2));
+                
+              } else if (pathname === '/checkout') {
+                // Nova versão com checkout mais rápido
+                const processingTime = 80; // Mais rápido que v1
+                await new Promise(resolve => setTimeout(resolve, processingTime));
+                
+                const response = {
+                  checkout: {
+                    version: APP_VERSION,
+                    strategy: DEPLOYMENT_STRATEGY,
+                    environment: ENVIRONMENT_COLOR,
+                    features: ['express_checkout', 'one_click_buy', 'ai_fraud_detection'],
+                    processingTime: processingTime,
+                    success: Math.random() > 0.05, // 95% success rate (melhor que v1)
+                    premiumFeatures: true,
+                    timestamp: new Date().toISOString()
+                  },
+                  responseTime: Date.now() - startTime
+                };
+                res.writeHead(200);
+                res.end(JSON.stringify(response, null, 2));
+                
+              } else if (pathname === '/products') {
+                const response = {
+                  products: [
+                    { id: 1, name: "Laptop Pro Max", price: 1599.99, version: APP_VERSION, recommended: true },
+                    { id: 2, name: "Smartphone X Pro", price: 1199.99, version: APP_VERSION, recommended: true },
+                    { id: 3, name: "Tablet Ultra 5G", price: 799.99, version: APP_VERSION, recommended: false },
+                    { id: 4, name: "Smartwatch Elite", price: 399.99, version: APP_VERSION, recommended: true }
+                  ],
+                  metadata: {
+                    version: APP_VERSION,
+                    strategy: DEPLOYMENT_STRATEGY,
+                    environment: ENVIRONMENT_COLOR,
+                    userSegment: USER_SEGMENT,
+                    recommendationEngine: 'AI-powered with ML',
+                    personalizedOffers: true
+                  },
+                  responseTime: Date.now() - startTime
+                };
+                res.writeHead(200);
+                res.end(JSON.stringify(response, null, 2));
+                
+              } else {
+                const response = {
+                  error: 'Not Found',
+                  version: APP_VERSION,
+                  strategy: DEPLOYMENT_STRATEGY,
+                  availableEndpoints: ['/', '/health', '/checkout', '/products'],
+                  responseTime: Date.now() - startTime
+                };
+                res.writeHead(404);
+                res.end(JSON.stringify(response, null, 2));
+              }
+              
+            } catch (error) {
+              console.error(`[${new Date().toISOString()}] Erro: ${error.message}`);
+              const response = {
+                error: 'Internal Server Error',
+                message: error.message,
+                version: APP_VERSION,
+                strategy: DEPLOYMENT_STRATEGY,
+                responseTime: Date.now() - startTime
+              };
+              res.writeHead(500);
+              res.end(JSON.stringify(response, null, 2));
+            }
+          });
+          
+          const PORT = 3000;
+          server.listen(PORT, '0.0.0.0', () => {
+            console.log(`[${new Date().toISOString()}] E-commerce App ${APP_VERSION} rodando na porta ${PORT}`);
+            console.log(`[${new Date().toISOString()}] Strategy: ${DEPLOYMENT_STRATEGY}, Environment: ${ENVIRONMENT_COLOR}, Segment: ${USER_SEGMENT}`);
+          });
+          EOF
+          
+          cd /app && node server.js
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+---
+# Versão v3 - Beta/Shadow Testing
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ecommerce-app-v3
+  namespace: ecommerce-unified
+  labels:
+    app: ecommerce-app
+    version: v3
+    strategy: shadow
+spec:
+  replicas: 1  # Apenas para shadow testing
+  selector:
+    matchLabels:
+      app: ecommerce-app
+      version: v3
+  template:
+    metadata:
+      labels:
+        app: ecommerce-app
+        version: v3
+        strategy: shadow
+        environment: shadow
+        segment: beta
+    spec:
+      containers:
+      - name: ecommerce
+        image: node:18-alpine
+        ports:
+        - containerPort: 3000
+        env:
+        - name: APP_VERSION
+          value: "v3.0.0-beta"
+        - name: DEPLOYMENT_STRATEGY
+          value: "shadow"
+        - name: ENVIRONMENT_COLOR
+          value: "shadow"
+        - name: USER_SEGMENT
+          value: "beta"
+        - name: FEATURE_FLAGS
+          value: "experimental_ui,ml_recommendations,blockchain_payments"
+        command: ["/bin/sh"]
+        args:
+        - -c
+        - |
+          cat > /app/server.js << 'EOF'
+          const http = require('http');
+          const url = require('url');
+          
+          const APP_VERSION = process.env.APP_VERSION || 'v3.0.0-beta';
+          const DEPLOYMENT_STRATEGY = process.env.DEPLOYMENT_STRATEGY || 'shadow';
+          const ENVIRONMENT_COLOR = process.env.ENVIRONMENT_COLOR || 'shadow';
+          const USER_SEGMENT = process.env.USER_SEGMENT || 'beta';
+          const FEATURE_FLAGS = process.env.FEATURE_FLAGS ? process.env.FEATURE_FLAGS.split(',') : [];
+          
+          const server = http.createServer(async (req, res) => {
+            const startTime = Date.now();
+            const requestId = req.headers['x-request-id'] || Math.random().toString(36).substring(7);
+            
+            // Headers de resposta
+            res.setHeader('Content-Type', 'application/json');
+            res.setHeader('X-App-Version', APP_VERSION);
+            res.setHeader('X-Deployment-Strategy', DEPLOYMENT_STRATEGY);
+            res.setHeader('X-Environment-Color', ENVIRONMENT_COLOR);
+            res.setHeader('X-User-Segment', USER_SEGMENT);
+            res.setHeader('X-Request-ID', requestId);
+            res.setHeader('Access-Control-Allow-Origin', '*');
+            
+            const parsedUrl = url.parse(req.url, true);
+            const pathname = parsedUrl.pathname;
+            
+            console.log(`[${new Date().toISOString()}] SHADOW ${req.method} ${pathname} - Version: ${APP_VERSION} (não retorna resposta ao usuário)`);
+            
+            try {
+              // Shadow testing - processar mas não retornar resposta real
+              if (pathname === '/') {
+                // Simular processamento experimental
+                await new Promise(resolve => setTimeout(resolve, 300));
+                console.log(`[${new Date().toISOString()}] SHADOW: Processamento experimental concluído`);
+                
+              } else if (pathname === '/health') {
+                console.log(`[${new Date().toISOString()}] SHADOW: Health check processado`);
+                
+              } else if (pathname === '/checkout') {
+                // Simular novo algoritmo de checkout
+                await new Promise(resolve => setTimeout(resolve, 120));
+                console.log(`[${new Date().toISOString()}] SHADOW: Novo algoritmo de checkout testado`);
+                
+              } else if (pathname === '/products') {
+                // Simular ML recommendations
+                await new Promise(resolve => setTimeout(resolve, 250));
+                console.log(`[${new Date().toISOString()}] SHADOW: ML recommendations processadas`);
+              }
+              
+              // Shadow testing sempre retorna 200 mas não afeta o usuário
+              const response = {
+                shadow: true,
+                version: APP_VERSION,
+                strategy: DEPLOYMENT_STRATEGY,
+                processed: true,
+                timestamp: new Date().toISOString(),
+                responseTime: Date.now() - startTime
+              };
+              res.writeHead(200);
+              res.end(JSON.stringify(response, null, 2));
+              
+            } catch (error) {
+              console.error(`[${new Date().toISOString()}] SHADOW ERROR: ${error.message}`);
+              res.writeHead(200); // Shadow não deve afetar o usuário mesmo com erro
+              res.end(JSON.stringify({ shadow: true, error: true }, null, 2));
+            }
+          });
+          
+          const PORT = 3000;
+          server.listen(PORT, '0.0.0.0', () => {
+            console.log(`[${new Date().toISOString()}] E-commerce App ${APP_VERSION} (SHADOW) rodando na porta ${PORT}`);
+            console.log(`[${new Date().toISOString()}] SHADOW MODE: Requests são processados mas não afetam usuários`);
+          });
+          EOF
+          
+          cd /app && node server.js
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ecommerce-app
+  namespace: ecommerce-unified
+  labels:
+    app: ecommerce-app
+spec:
+  ports:
+  - port: 3000
+    targetPort: 3000
+    name: http
+  selector:
+    app: ecommerce-app

@@ -1,0 +1,349 @@
+---
+# Kiali Configuration for Istio Managed on AKS with Prometheus Managed
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kiali-operator
+  labels:
+    istio-injection: enabled
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kiali-operator
+  namespace: kiali-operator
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kiali-operator
+rules:
+- apiGroups: [""]
+  resources: ["*"]
+  verbs: ["*"]
+- apiGroups: ["apps"]
+  resources: ["*"]
+  verbs: ["*"]
+- apiGroups: ["networking.istio.io"]
+  resources: ["*"]
+  verbs: ["*"]
+- apiGroups: ["security.istio.io"]
+  resources: ["*"]
+  verbs: ["*"]
+- apiGroups: ["telemetry.istio.io"]
+  resources: ["*"]
+  verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kiali-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kiali-operator
+subjects:
+- kind: ServiceAccount
+  name: kiali-operator
+  namespace: kiali-operator
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kiali-operator
+  namespace: kiali-operator
+  labels:
+    app: kiali-operator
+    version: v1.79.0
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kiali-operator
+  template:
+    metadata:
+      labels:
+        app: kiali-operator
+        version: v1.79.0
+    spec:
+      serviceAccountName: kiali-operator
+      containers:
+      - name: kiali-operator
+        image: quay.io/kiali/kiali-operator:v1.79.0
+        ports:
+        - containerPort: 8080
+          name: http-metrics
+        env:
+        - name: WATCH_NAMESPACE
+          value: ""
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: OPERATOR_NAME
+          value: "kiali-operator"
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kiali-operator-metrics
+  namespace: kiali-operator
+  labels:
+    app: kiali-operator
+spec:
+  ports:
+  - name: http-metrics
+    port: 8080
+    targetPort: 8080
+  selector:
+    app: kiali-operator
+---
+# Kiali Custom Resource for Istio Managed
+apiVersion: kiali.io/v1alpha1
+kind: Kiali
+metadata:
+  name: kiali
+  namespace: kiali-operator
+spec:
+  installation_tag: "Kiali for Istio Managed AKS"
+  istio_namespace: "aks-istio-system"
+  
+  # External Services Configuration for Managed Services
+  external_services:
+    prometheus:
+      # Azure Monitor for Prometheus endpoint
+      url: "http://prometheus-server.prometheus.svc.cluster.local:80"
+      custom_headers:
+        Authorization: "Bearer TOKEN_PLACEHOLDER"
+      health_check_url: "http://prometheus-server.prometheus.svc.cluster.local:80/-/healthy"
+    
+    grafana:
+      enabled: true
+      in_cluster_url: "http://grafana.grafana.svc.cluster.local:80"
+      url: "http://grafana.grafana.svc.cluster.local:80"
+      auth:
+        type: "basic"
+        username: "admin"
+        password: "admin123"
+      dashboards:
+      - name: "Istio Service Mesh"
+        variables:
+          namespace: "var-namespace"
+          service: "var-service"
+    
+    tracing:
+      enabled: true
+      in_cluster_url: "http://jaeger-query.jaeger.svc.cluster.local:16686"
+      url: "http://jaeger-query.jaeger.svc.cluster.local:16686"
+      use_grpc: false
+      
+  # Authentication Strategy
+  auth:
+    strategy: "anonymous"
+    
+  # Deployment Configuration
+  deployment:
+    # Service configuration
+    service_type: "LoadBalancer"
+    
+    # Pod configuration
+    replicas: 1
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "128Mi"
+      limits:
+        cpu: "500m"
+        memory: "1Gi"
+    
+    # Security context
+    security_context:
+      runAsNonRoot: true
+      runAsUser: 1001
+      fsGroup: 1001
+    
+    # Environment variables for Istio Managed
+    pod_annotations:
+      sidecar.istio.io/inject: "true"
+      prometheus.io/scrape: "true"
+      prometheus.io/port: "20001"
+      prometheus.io/path: "/kiali/api/health"
+    
+    # Volume mounts for certificates
+    volume_mounts:
+    - name: kiali-cert
+      mount_path: "/kiali-cert"
+      read_only: true
+    - name: kiali-secret
+      mount_path: "/kiali-secret"
+      read_only: true
+      
+  # Server Configuration
+  server:
+    port: 20001
+    web_root: "/kiali"
+    web_fqdn: ""
+    web_schema: "http"
+    
+    # CORS configuration for multi-cluster
+    cors_allow_all: true
+    
+    # Metrics configuration
+    metrics_enabled: true
+    metrics_port: 9090
+    
+  # API Configuration
+  api:
+    namespaces:
+      exclude:
+      - "kube-.*"
+      - "openshift.*"
+      - "ibm.*"
+      - "kiali-operator"
+      include: [".*"]
+      label_selector_exclude: ""
+      label_selector_include: ""
+      
+  # Istio Configuration for Managed Service
+  istio_labels:
+    app_label_name: "app"
+    injection_label_name: "istio-injection"
+    injection_label_rev: "istio.io/rev"
+    version_label_name: "version"
+    
+  # Kubernetes Configuration
+  kubernetes_config:
+    burst: 200
+    cache_duration: 300
+    cache_token_namespace_duration: 10
+    excluded_workloads:
+    - "CronJob"
+    - "DeploymentConfig"
+    - "Job"
+    - "ReplicationController"
+    qps: 175
+    
+  # Login Token Configuration
+  login_token:
+    signing_key: "kiali-signing-key"
+    expiration_seconds: 86400
+    
+  # Multi-cluster configuration
+  clustering:
+    clusters:
+    - name: "aks-istio-primary"
+      network: "network1"
+      secret_name: "istio-remote-secret-primary"
+    - name: "aks-istio-secondary" 
+      network: "network2"
+      secret_name: "istio-remote-secret-secondary"
+      
+---
+# Service for external access
+apiVersion: v1
+kind: Service
+metadata:
+  name: kiali
+  namespace: kiali-operator
+  labels:
+    app: kiali
+    version: v1.79.0
+spec:
+  type: LoadBalancer
+  ports:
+  - name: http
+    port: 20001
+    targetPort: 20001
+    protocol: TCP
+  - name: http-metrics
+    port: 9090
+    targetPort: 9090
+    protocol: TCP
+  selector:
+    app.kubernetes.io/name: kiali
+---
+# ConfigMap for additional Kiali configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kiali-config
+  namespace: kiali-operator
+  labels:
+    app: kiali
+data:
+  config.yaml: |
+    # Additional Kiali configuration for Istio Managed
+    server:
+      web_root: "/kiali"
+      web_port: 20001
+      web_schema: "http"
+      
+    external_services:
+      prometheus:
+        url: "http://prometheus-server.prometheus.svc.cluster.local:80"
+        custom_headers:
+          X-Scope-OrgID: "tenant-1"
+        query_scope:
+          mesh_id: "cluster.local"
+          cluster: "Kubernetes"
+          
+      grafana:
+        enabled: true
+        url: "http://grafana.grafana.svc.cluster.local:80"
+        in_cluster_url: "http://grafana.grafana.svc.cluster.local:80"
+        auth:
+          type: basic
+          username: admin
+          password: admin123
+        dashboards:
+        - name: "Istio Service Mesh"
+          variables:
+            namespace: "var-namespace"
+            service: "var-service"
+            
+      tracing:
+        enabled: true
+        url: "http://jaeger-query.jaeger.svc.cluster.local:16686"
+        in_cluster_url: "http://jaeger-query.jaeger.svc.cluster.local:16686"
+        namespace_selector: true
+        
+    istio_labels:
+      app_label_name: "app"
+      injection_label_name: "istio-injection"
+      version_label_name: "version"
+      
+    kubernetes_config:
+      cache_duration: 300
+      cache_token_namespace_duration: 10
+      burst: 200
+      qps: 175
+      
+    deployment:
+      cluster_wide_access: true
+      accessible_namespaces: ["**"]
+      view_only_mode: false
+      
+    # Health configuration for managed services
+    health_config:
+      rate:
+      - namespace: ".*"
+        kind: ".*"
+        name: ".*"
+        tolerance:
+        - code: "4XX"
+          failure_threshold: 10
+          protocol: "http"
+        - code: "5XX"
+          failure_threshold: 5
+          protocol: "http"

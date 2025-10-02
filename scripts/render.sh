@@ -1,53 +1,98 @@
 #!/bin/bash
-# Script para renderizar templates YAML do Istio
 
-set -e
+# Advanced Template Renderer for Istio AKS Templates
+# Supports all deployment strategies and configurations
 
-# Parâmetros com valores padrão
+set -euo pipefail
+
+# Default values
 SERVICE_NAME=""
-NAMESPACE="default"
+NAMESPACE=""
 HOST=""
-TLS_SECRET_NAME=""
-SERVICE_PORT="80"
-CALLER_SERVICE_ACCOUNT="default"
+FILE=""
+OUTPUT_DIR="manifests"
+TLS_SECRET=""
+CALLER_SA=""
 METHOD="GET"
 PATH="/"
-LOAD_BALANCER_TYPE="ROUND_ROBIN"
-MAX_CONNECTIONS=100
-MAX_PENDING_REQUESTS=1024
-MAX_REQUESTS_PER_CONN=10
-CONSECUTIVE_5XX_ERRORS=5
-OUTLIER_INTERVAL="10s"
+MAX_CONNECTIONS="50"
+CONSECUTIVE_5XX_ERRORS="5"
 BASE_EJECTION_TIME="30s"
-MAX_EJECTION_PERCENT=50
-TEMPLATE_FILE=""
-OUTPUT_DIR="manifests"
+CANARY_VERSION="v2.0.0"
+SWITCH_TIMESTAMP=$(/bin/date -Iseconds)
 
-# Função para exibir o uso
+# Deployment strategy variables
+ACTIVE_ENVIRONMENT="blue"
+STABLE_WEIGHT="90"
+EXPERIMENTAL_WEIGHT="8"
+CANARY_WEIGHT="2"
+DEFAULT_STABLE_WEIGHT="85"
+DEFAULT_EXPERIMENTAL_WEIGHT="10"
+DEFAULT_CANARY_WEIGHT="5"
+SHADOW_PERCENTAGE="10"
+
+# Function to show usage
 usage() {
-    echo "Uso: $0 -f <template_file> -s <service_name> -n <namespace> -h <host> [outras opções]"
-    echo "Opções:"
-    echo "  -f, --template-file <arquivo>   Arquivo de template a ser renderizado (obrigatório)"
-    echo "  -s, --service-name <nome>       Nome do serviço (obrigatório)"
-    echo "  -n, --namespace <namespace>     Namespace (padrão: default)"
-    echo "  -h, --host <host>               Host para o Gateway/VirtualService"
-    echo "  --tls-secret <nome>             Nome do secret TLS para o Gateway"
-    echo "  --service-port <porta>          Porta do serviço (padrão: 80)"
-    echo "  --caller-sa <sa>                Service Account do chamador para AuthorizationPolicy"
-    echo "  --method <método>               Método HTTP para AuthorizationPolicy (padrão: GET)"
-    echo "  --path <caminho>                Caminho para AuthorizationPolicy (padrão: /)"
-    echo "  -o, --output-dir <dir>          Diretório de saída (padrão: manifests)"
-    exit 1
+    cat << EOF
+Usage: $0 -f <template_file> -s <service_name> -n <namespace> [OPTIONS]
+
+Required:
+  -f, --file <file>           Template file to render
+  -s, --service <name>        Service name
+  -n, --namespace <name>      Kubernetes namespace
+
+Optional:
+  -o, --output <dir>          Output directory (default: manifests)
+  -h, --host <hostname>       Hostname for Gateway
+  --tls-secret <name>         TLS secret name for Gateway
+  --caller-sa <name>          Caller service account for AuthorizationPolicy
+  --method <method>           HTTP method for AuthorizationPolicy (default: GET)
+  --path <path>               HTTP path for AuthorizationPolicy (default: /)
+  --max-connections <num>     Max connections for DestinationRule (default: 50)
+  --consecutive-5xx-errors <num>  Consecutive 5xx errors threshold (default: 5)
+  --base-ejection-time <time> Base ejection time for outlier detection (default: 30s)
+  
+  # Deployment Strategy Options
+  --active-environment <env>  Active environment: blue|green (default: blue)
+  --stable-weight <num>       Stable variant weight percentage (default: 90)
+  --experimental-weight <num> Experimental variant weight percentage (default: 8)
+  --canary-weight <num>       Canary variant weight percentage (default: 2)
+  --default-stable-weight <num>     Default stable weight for ultimate strategy (default: 85)
+  --default-experimental-weight <num> Default experimental weight for ultimate strategy (default: 10)
+  --default-canary-weight <num>     Default canary weight for ultimate strategy (default: 5)
+  --shadow-percentage <num>   Shadow traffic percentage (default: 10)
+  --canary-version <version>  Canary version tag (default: v2.0.0)
+  --switch-timestamp <time>   Blue/Green switch timestamp (default: current time)
+
+Examples:
+  # Basic Gateway
+  $0 -f templates/base/gateway.yaml -s frontend -n ecommerce-demo -h app.example.com
+
+  # Advanced DestinationRule with circuit breaker
+  $0 -f templates/traffic-management/advanced-destination-rule.yaml \\
+     -s payment-service -n ecommerce-demo \\
+     --max-connections 30 --consecutive-5xx-errors 3 --base-ejection-time 60s
+
+  # Ultimate combined strategy
+  $0 -f templates/deployment-strategies/ab-bluegreen-canary-combined.yaml \\
+     -s order-service -n ecommerce-demo \\
+     --active-environment green --canary-weight 10 --experimental-weight 15
+
+  # Security policy
+  $0 -f templates/security/authorization-policy.yaml \\
+     -s user-service -n ecommerce-demo \\
+     --caller-sa api-gateway --method POST --path "/api/users"
+EOF
 }
 
-# Parse dos argumentos
-while [[ "$#" -gt 0 ]]; do
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
     case $1 in
-        -f|--template-file)
-            TEMPLATE_FILE="$2"
+        -f|--file)
+            FILE="$2"
             shift 2
             ;;
-        -s|--service-name)
+        -s|--service)
             SERVICE_NAME="$2"
             shift 2
             ;;
@@ -55,20 +100,20 @@ while [[ "$#" -gt 0 ]]; do
             NAMESPACE="$2"
             shift 2
             ;;
+        -o|--output)
+            OUTPUT_DIR="$2"
+            shift 2
+            ;;
         -h|--host)
             HOST="$2"
             shift 2
             ;;
         --tls-secret)
-            TLS_SECRET_NAME="$2"
-            shift 2
-            ;;
-        --service-port)
-            SERVICE_PORT="$2"
+            TLS_SECRET="$2"
             shift 2
             ;;
         --caller-sa)
-            CALLER_SERVICE_ACCOUNT="$2"
+            CALLER_SA="$2"
             shift 2
             ;;
         --method)
@@ -91,90 +136,141 @@ while [[ "$#" -gt 0 ]]; do
             BASE_EJECTION_TIME="$2"
             shift 2
             ;;
-        --max-ejection-percent)
-            MAX_EJECTION_PERCENT="$2"
+        --active-environment)
+            ACTIVE_ENVIRONMENT="$2"
             shift 2
             ;;
-        --gateway-name)
-            GATEWAY_NAME="$2"
+        --stable-weight)
+            STABLE_WEIGHT="$2"
             shift 2
             ;;
-        --gateway-selector)
-            GATEWAY_SELECTOR="$2"
+        --experimental-weight)
+            EXPERIMENTAL_WEIGHT="$2"
             shift 2
             ;;
-        --gateway-type)
-            GATEWAY_TYPE="$2"
+        --canary-weight)
+            CANARY_WEIGHT="$2"
             shift 2
             ;;
-        --tls-mode)
-            TLS_MODE="$2"
+        --default-stable-weight)
+            DEFAULT_STABLE_WEIGHT="$2"
             shift 2
             ;;
-        -o|--output-dir)
-            OUTPUT_DIR="$2"
+        --default-experimental-weight)
+            DEFAULT_EXPERIMENTAL_WEIGHT="$2"
             shift 2
+            ;;
+        --default-canary-weight)
+            DEFAULT_CANARY_WEIGHT="$2"
+            shift 2
+            ;;
+        --shadow-percentage)
+            SHADOW_PERCENTAGE="$2"
+            shift 2
+            ;;
+        --canary-version)
+            CANARY_VERSION="$2"
+            shift 2
+            ;;
+        --switch-timestamp)
+            SWITCH_TIMESTAMP="$2"
+            shift 2
+            ;;
+        --help)
+            usage
+            exit 0
             ;;
         *)
+            echo "Unknown option: $1"
             usage
+            exit 1
             ;;
     esac
 done
 
-# Validação de parâmetros obrigatórios
-if [ -z "${TEMPLATE_FILE}" ] || [ -z "${SERVICE_NAME}" ]; then
-    echo "Erro: --template-file e --service-name são obrigatórios."
+# Validate required parameters
+if [[ -z "$FILE" || -z "$SERVICE_NAME" || -z "$NAMESPACE" ]]; then
+    echo "Error: Missing required parameters"
     usage
-fi
-
-if [ ! -f "${TEMPLATE_FILE}" ]; then
-    echo "Erro: Arquivo de template não encontrado em ${TEMPLATE_FILE}"
     exit 1
 fi
 
-# Cria o diretório de saída se não existir
-/usr/bin/mkdir -p "${OUTPUT_DIR}/${SERVICE_NAME}"
+# Check if template file exists
+if [[ ! -f "$FILE" ]]; then
+    echo "Error: Template file '$FILE' not found"
+    exit 1
+fi
 
-TEMPLATE_BASENAME=$(/usr/bin/basename "${TEMPLATE_FILE}")
-OUTPUT_FILE="${OUTPUT_DIR}/${SERVICE_NAME}/${TEMPLATE_BASENAME}"
+# Create output directory structure
+OUTPUT_SERVICE_DIR="$OUTPUT_DIR/$SERVICE_NAME"
+/bin/mkdir -p "$OUTPUT_SERVICE_DIR"
 
-# Valores padrão adicionais para templates avançados
-GATEWAY_NAME="${SERVICE_NAME}-gateway"
-GATEWAY_SELECTOR="aks-istio-ingressgateway-external"
-GATEWAY_TYPE="public"
-TLS_MODE="SIMPLE"
-TLS_MIN_VERSION="TLSV1_2"
-TLS_MAX_VERSION="TLSV1_3"
-HTTPS_REDIRECT="true"
-MIN_HEALTH_PERCENT="30"
+# Get template filename without path and extension
+TEMPLATE_NAME=$(/usr/bin/basename "$FILE" .yaml)
 
-# Renderiza o template
-/usr/bin/cp "${TEMPLATE_FILE}" "${OUTPUT_FILE}"
+# Output file path
+OUTPUT_FILE="$OUTPUT_SERVICE_DIR/$TEMPLATE_NAME.yaml"
 
-/usr/bin/sed -i "s/{{SERVICE_NAME}}/${SERVICE_NAME}/g" "${OUTPUT_FILE}"
-/usr/bin/sed -i "s/{{NAMESPACE}}/${NAMESPACE}/g" "${OUTPUT_FILE}"
-/usr/bin/sed -i "s/{{HOST}}/${HOST}/g" "${OUTPUT_FILE}"
-/usr/bin/sed -i "s/{{TLS_SECRET_NAME}}/${TLS_SECRET_NAME}/g" "${OUTPUT_FILE}"
-/usr/bin/sed -i "s/{{SERVICE_PORT}}/${SERVICE_PORT}/g" "${OUTPUT_FILE}"
-/usr/bin/sed -i "s/{{CALLER_SERVICE_ACCOUNT}}/${CALLER_SERVICE_ACCOUNT}/g" "${OUTPUT_FILE}"
-/usr/bin/sed -i "s/{{METHOD}}/${METHOD}/g" "${OUTPUT_FILE}"
-/usr/bin/sed -i "s/{{PATH}}/${PATH//\//\\/}/g" "${OUTPUT_FILE}" # Escapa barras para o sed
-/usr/bin/sed -i "s/{{LOAD_BALANCER_TYPE}}/${LOAD_BALANCER_TYPE}/g" "${OUTPUT_FILE}"
-/usr/bin/sed -i "s/{{MAX_CONNECTIONS}}/${MAX_CONNECTIONS}/g" "${OUTPUT_FILE}"
-/usr/bin/sed -i "s/{{MAX_PENDING_REQUESTS}}/${MAX_PENDING_REQUESTS}/g" "${OUTPUT_FILE}"
-/usr/bin/sed -i "s/{{MAX_REQUESTS_PER_CONN}}/${MAX_REQUESTS_PER_CONN}/g" "${OUTPUT_FILE}"
-/usr/bin/sed -i "s/{{CONSECUTIVE_5XX_ERRORS}}/${CONSECUTIVE_5XX_ERRORS}/g" "${OUTPUT_FILE}"
-/usr/bin/sed -i "s/{{OUTLIER_INTERVAL}}/${OUTLIER_INTERVAL}/g" "${OUTPUT_FILE}"
-/usr/bin/sed -i "s/{{BASE_EJECTION_TIME}}/${BASE_EJECTION_TIME}/g" "${OUTPUT_FILE}"
-/usr/bin/sed -i "s/{{MAX_EJECTION_PERCENT}}/${MAX_EJECTION_PERCENT}/g" "${OUTPUT_FILE}"
-/usr/bin/sed -i "s/{{GATEWAY_NAME}}/${GATEWAY_NAME}/g" "${OUTPUT_FILE}"
-/usr/bin/sed -i "s/{{GATEWAY_SELECTOR}}/${GATEWAY_SELECTOR}/g" "${OUTPUT_FILE}"
-/usr/bin/sed -i "s/{{GATEWAY_TYPE}}/${GATEWAY_TYPE}/g" "${OUTPUT_FILE}"
-/usr/bin/sed -i "s/{{TLS_MODE}}/${TLS_MODE}/g" "${OUTPUT_FILE}"
-/usr/bin/sed -i "s/{{TLS_MIN_VERSION}}/${TLS_MIN_VERSION}/g" "${OUTPUT_FILE}"
-/usr/bin/sed -i "s/{{TLS_MAX_VERSION}}/${TLS_MAX_VERSION}/g" "${OUTPUT_FILE}"
-/usr/bin/sed -i "s/{{HTTPS_REDIRECT}}/${HTTPS_REDIRECT}/g" "${OUTPUT_FILE}"
-/usr/bin/sed -i "s/{{MIN_HEALTH_PERCENT}}/${MIN_HEALTH_PERCENT}/g" "${OUTPUT_FILE}"
+echo "🔧 Rendering template: $FILE"
+echo "📦 Service: $SERVICE_NAME"
+echo "🏷️  Namespace: $NAMESPACE"
+echo "📁 Output: $OUTPUT_FILE"
 
-echo "Template '${TEMPLATE_FILE}' renderizado com sucesso em '${OUTPUT_FILE}'"
+# Create a temporary file for processing
+TEMP_FILE=$(/usr/bin/mktemp)
+
+# Copy template to temp file
+/bin/cp "$FILE" "$TEMP_FILE"
+
+# Perform substitutions
+/bin/sed -i "s/SERVICE_NAME/$SERVICE_NAME/g" "$TEMP_FILE"
+/bin/sed -i "s/NAMESPACE/$NAMESPACE/g" "$TEMP_FILE"
+/bin/sed -i "s/HOST/$HOST/g" "$TEMP_FILE"
+/bin/sed -i "s/TLS_SECRET/$TLS_SECRET/g" "$TEMP_FILE"
+/bin/sed -i "s/CALLER_SA/$CALLER_SA/g" "$TEMP_FILE"
+/bin/sed -i "s/METHOD/$METHOD/g" "$TEMP_FILE"
+/bin/sed -i "s|PATH|$PATH|g" "$TEMP_FILE"
+/bin/sed -i "s/MAX_CONNECTIONS/$MAX_CONNECTIONS/g" "$TEMP_FILE"
+/bin/sed -i "s/CONSECUTIVE_5XX_ERRORS/$CONSECUTIVE_5XX_ERRORS/g" "$TEMP_FILE"
+/bin/sed -i "s/BASE_EJECTION_TIME/$BASE_EJECTION_TIME/g" "$TEMP_FILE"
+
+# Deployment strategy substitutions
+/bin/sed -i "s/ACTIVE_ENVIRONMENT/$ACTIVE_ENVIRONMENT/g" "$TEMP_FILE"
+/bin/sed -i "s/STABLE_WEIGHT/$STABLE_WEIGHT/g" "$TEMP_FILE"
+/bin/sed -i "s/EXPERIMENTAL_WEIGHT/$EXPERIMENTAL_WEIGHT/g" "$TEMP_FILE"
+/bin/sed -i "s/CANARY_WEIGHT/$CANARY_WEIGHT/g" "$TEMP_FILE"
+/bin/sed -i "s/DEFAULT_STABLE_WEIGHT/$DEFAULT_STABLE_WEIGHT/g" "$TEMP_FILE"
+/bin/sed -i "s/DEFAULT_EXPERIMENTAL_WEIGHT/$DEFAULT_EXPERIMENTAL_WEIGHT/g" "$TEMP_FILE"
+/bin/sed -i "s/DEFAULT_CANARY_WEIGHT/$DEFAULT_CANARY_WEIGHT/g" "$TEMP_FILE"
+/bin/sed -i "s/SHADOW_PERCENTAGE/$SHADOW_PERCENTAGE/g" "$TEMP_FILE"
+/bin/sed -i "s/CANARY_VERSION/$CANARY_VERSION/g" "$TEMP_FILE"
+/bin/sed -i "s/SWITCH_TIMESTAMP/$SWITCH_TIMESTAMP/g" "$TEMP_FILE"
+
+# Move processed file to output location
+/bin/cp "$TEMP_FILE" "$OUTPUT_FILE"
+
+# Clean up
+/bin/rm -f "$TEMP_FILE"
+
+echo "✅ Template rendered successfully: $OUTPUT_FILE"
+
+# Validate YAML syntax if kubectl is available
+if command -v kubectl >/dev/null 2>&1; then
+    if kubectl apply --dry-run=client -f "$OUTPUT_FILE" >/dev/null 2>&1; then
+        echo "✅ YAML syntax validation passed"
+    else
+        echo "⚠️  YAML syntax validation failed - please check the output file"
+        exit 1
+    fi
+else
+    echo "ℹ️  kubectl not available - skipping YAML validation"
+fi
+
+# Show file contents if it's small enough
+if [[ $(/usr/bin/wc -l < "$OUTPUT_FILE") -le 50 ]]; then
+    echo ""
+    echo "📄 Generated content:"
+    echo "===================="
+    /bin/cat "$OUTPUT_FILE"
+fi
 
