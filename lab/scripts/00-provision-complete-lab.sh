@@ -26,7 +26,7 @@ AZURE_TENANT_ID="${AZURE_TENANT_ID:-03ebf151-fe12-4011-976d-d593ff5252a0}"
 AZURE_SUBSCRIPTION_ID="${AZURE_SUBSCRIPTION_ID:-e8b8de74-8888-4318-a598-fbe78fb29c59}"
 RESOURCE_GROUP="${RESOURCE_GROUP:-lab-istio}"
 LOCATION="${LOCATION:-westus3}"
-KEY_VAULT_NAME="${KEY_VAULT_NAME:-kv-istio-lab-certs-$(date +%s)}"
+KEY_VAULT_NAME="${KEY_VAULT_NAME:-kvistio$(date +%s | tail -c 6)}"
 
 # Funções de logging
 log_info() {

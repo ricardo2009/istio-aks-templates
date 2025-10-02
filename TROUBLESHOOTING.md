@@ -33,6 +33,38 @@ Execute o script de verificação de dependências:
 
 ---
 
+## ❌ Erro: "VaultNameNotValid"
+
+### **Problema**
+```
+The vault name 'kv-istio-lab-certs-1759424802' is invalid. 
+A vault's name must be between 3-24 alphanumeric characters.
+```
+
+### **Causa**
+O nome gerado para o Key Vault excede 24 caracteres ou contém caracteres inválidos.
+
+### **✅ Solução**
+Este erro foi **corrigido** na versão mais recente do script. A correção substitui:
+
+**❌ Nome muito longo (26 caracteres):**
+```bash
+KEY_VAULT_NAME="kv-istio-lab-certs-$(date +%s)"  # 26 chars
+```
+
+**✅ Nome correto (12 caracteres):**
+```bash
+KEY_VAULT_NAME="kvistio$(date +%s | tail -c 6)"  # 12 chars
+```
+
+### **Regras do Azure Key Vault**
+- ✅ 3-24 caracteres alfanuméricos
+- ✅ Deve começar com letra
+- ✅ Deve terminar com letra ou dígito
+- ✅ Sem hífens consecutivos
+
+---
+
 ## ❌ Erro: "command not found"
 
 ### **Dependências Necessárias**
