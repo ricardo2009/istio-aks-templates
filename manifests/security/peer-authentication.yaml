@@ -1,0 +1,38 @@
+# ===============================================================================
+# PEER AUTHENTICATION - mTLS STRICT MODE
+# ===============================================================================
+# Enforce STRICT mTLS across all services in the production namespace
+# All inter-service communication must use mutual TLS
+# ===============================================================================
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: production
+spec:
+  mtls:
+    mode: STRICT
+---
+# ===============================================================================
+# PEER AUTHENTICATION - System Namespace (Permissive for health checks)
+# ===============================================================================
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: kube-system
+spec:
+  mtls:
+    mode: PERMISSIVE
+---
+# ===============================================================================
+# PEER AUTHENTICATION - Istio System (Strict)
+# ===============================================================================
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: istio-system
+spec:
+  mtls:
+    mode: STRICT

@@ -1,0 +1,43 @@
+# ===============================================================================
+# REQUEST AUTHENTICATION - JWT/OIDC Integration
+# ===============================================================================
+# Validate JWT tokens from Azure AD for authenticated endpoints
+# ===============================================================================
+apiVersion: security.istio.io/v1beta1
+kind: RequestAuthentication
+metadata:
+  name: azure-ad-jwt
+  namespace: production
+spec:
+  selector:
+    matchLabels:
+      app: api-gateway
+  jwtRules:
+  - issuer: "https://sts.windows.net/<TENANT_ID>/"  # Replace with your Azure AD tenant ID
+    jwksUri: "https://login.microsoftonline.com/<TENANT_ID>/discovery/v2.0/keys"
+    audiences:
+    - "api://<APPLICATION_ID>"  # Replace with your application ID
+    forwardOriginalToken: true
+    outputPayloadToHeader: "x-jwt-payload"
+---
+# ===============================================================================
+# REQUEST AUTHENTICATION - Public Services
+# ===============================================================================
+# Allow both authenticated and unauthenticated requests
+# Authorization policies will enforce which endpoints require authentication
+# ===============================================================================
+apiVersion: security.istio.io/v1beta1
+kind: RequestAuthentication
+metadata:
+  name: frontend-jwt
+  namespace: production
+spec:
+  selector:
+    matchLabels:
+      app: frontend
+  jwtRules:
+  - issuer: "https://sts.windows.net/<TENANT_ID>/"
+    jwksUri: "https://login.microsoftonline.com/<TENANT_ID>/discovery/v2.0/keys"
+    audiences:
+    - "api://<APPLICATION_ID>"
+    forwardOriginalToken: true

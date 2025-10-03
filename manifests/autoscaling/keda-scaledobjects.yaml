@@ -1,0 +1,298 @@
+# ===============================================================================
+# KEDA SCALEDOBJECT - Product Service (Prometheus Scaler)
+# ===============================================================================
+# Scale based on request rate from Prometheus
+# ===============================================================================
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: product-service-scaler
+  namespace: production
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: product-service
+  
+  # Scaling parameters
+  minReplicaCount: 3
+  maxReplicaCount: 30
+  
+  # Cooldown period
+  cooldownPeriod: 300  # 5 minutes
+  
+  # Polling interval
+  pollingInterval: 30  # Check every 30 seconds
+  
+  triggers:
+  # 1. Scale based on request rate (RPS)
+  - type: prometheus
+    metadata:
+      serverAddress: http://prometheus.monitoring:9090
+      metricName: istio_requests_per_second
+      threshold: "1000"  # Scale up when RPS > 1000 per pod
+      query: |
+        sum(rate(istio_requests_total{
+          destination_workload="product-service",
+          destination_workload_namespace="production"
+        }[1m]))
+  
+  # 2. Scale based on P95 latency
+  - type: prometheus
+    metadata:
+      serverAddress: http://prometheus.monitoring:9090
+      metricName: istio_request_duration_p95
+      threshold: "500"  # Scale up when P95 > 500ms
+      query: |
+        histogram_quantile(0.95,
+          sum(rate(istio_request_duration_milliseconds_bucket{
+            destination_workload="product-service",
+            destination_workload_namespace="production"
+          }[2m])) by (le)
+        )
+  
+  # 3. CPU-based scaling (backup)
+  - type: cpu
+    metadataRef:
+      name: cpu-trigger
+    metadata:
+      type: Utilization
+      value: "80"  # Scale when CPU > 80%
+  
+  # 4. Memory-based scaling (backup)
+  - type: memory
+    metadata:
+      type: Utilization
+      value: "85"  # Scale when Memory > 85%
+---
+# ===============================================================================
+# KEDA SCALEDOBJECT - Order Service (Azure Queue + Prometheus)
+# ===============================================================================
+# Scale based on queue depth and request metrics
+# ===============================================================================
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: order-service-scaler
+  namespace: production
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: order-service
+  
+  minReplicaCount: 2
+  maxReplicaCount: 25
+  cooldownPeriod: 180
+  pollingInterval: 30
+  
+  triggers:
+  # 1. Azure Storage Queue scaler
+  - type: azure-queue
+    metadata:
+      queueName: orders-processing
+      queueLength: "10"  # Scale up when queue has > 10 messages
+      connectionFromEnv: AZURE_STORAGE_CONNECTION_STRING
+      accountName: ordersqueueXXXXX
+  
+  # 2. Request rate from Prometheus
+  - type: prometheus
+    metadata:
+      serverAddress: http://prometheus.monitoring:9090
+      metricName: order_service_rps
+      threshold: "500"
+      query: |
+        sum(rate(istio_requests_total{
+          destination_workload="order-service",
+          destination_workload_namespace="production"
+        }[1m]))
+  
+  # 3. Custom business metric - pending orders
+  - type: prometheus
+    metadata:
+      serverAddress: http://prometheus.monitoring:9090
+      metricName: pending_orders_count
+      threshold: "100"  # Scale up when > 100 pending orders
+      query: |
+        order_service_pending_orders_total{
+          namespace="production"
+        }
+---
+# ===============================================================================
+# KEDA SCALEDOBJECT - Payment Service (CPU + Custom Metrics)
+# ===============================================================================
+# Conservative scaling for critical payment processing
+# ===============================================================================
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: payment-service-scaler
+  namespace: production
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: payment-service
+  
+  minReplicaCount: 3  # Always run at least 3 for reliability
+  maxReplicaCount: 15
+  cooldownPeriod: 300  # Longer cooldown for stability
+  pollingInterval: 60  # Less aggressive polling
+  
+  triggers:
+  # 1. Payment queue depth
+  - type: prometheus
+    metadata:
+      serverAddress: http://prometheus.monitoring:9090
+      metricName: payment_queue_depth
+      threshold: "50"
+      query: |
+        payment_service_queue_depth{
+          namespace="production"
+        }
+  
+  # 2. CPU (conservative threshold)
+  - type: cpu
+    metadata:
+      type: Utilization
+      value: "70"  # Scale earlier for payment processing
+  
+  # 3. Active payment transactions
+  - type: prometheus
+    metadata:
+      serverAddress: http://prometheus.monitoring:9090
+      metricName: active_payment_transactions
+      threshold: "100"
+      query: |
+        payment_service_active_transactions{
+          namespace="production"
+        }
+---
+# ===============================================================================
+# KEDA SCALEDOBJECT - Frontend (HTTP Scaler)
+# ===============================================================================
+# Scale based on incoming HTTP requests
+# ===============================================================================
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: frontend-scaler
+  namespace: production
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: frontend
+  
+  minReplicaCount: 3
+  maxReplicaCount: 20
+  cooldownPeriod: 180
+  pollingInterval: 30
+  
+  triggers:
+  # 1. HTTP interceptor scaler (requires KEDA HTTP add-on)
+  - type: prometheus
+    metadata:
+      serverAddress: http://prometheus.monitoring:9090
+      metricName: frontend_rps_per_pod
+      threshold: "2000"  # Each pod handles 2000 RPS
+      query: |
+        sum(rate(istio_requests_total{
+          destination_workload="frontend",
+          destination_workload_namespace="production"
+        }[1m])) 
+        / 
+        count(kube_pod_status_ready{
+          namespace="production",
+          pod=~"frontend-.*"
+        })
+  
+  # 2. CPU
+  - type: cpu
+    metadata:
+      type: Utilization
+      value: "75"
+  
+  # 3. Memory
+  - type: memory
+    metadata:
+      type: Utilization
+      value: "80"
+---
+# ===============================================================================
+# KEDA SCALEDOBJECT - Background Jobs (Cron-based)
+# ===============================================================================
+# Scale up during business hours, scale down at night
+# ===============================================================================
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: background-jobs-scaler
+  namespace: production
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: background-jobs
+  
+  minReplicaCount: 1
+  maxReplicaCount: 10
+  
+  triggers:
+  # Scale based on time of day
+  - type: cron
+    metadata:
+      timezone: America/New_York
+      start: 0 8 * * 1-5  # 8 AM Monday-Friday
+      end: 0 18 * * 1-5   # 6 PM Monday-Friday
+      desiredReplicas: "5"
+  
+  # Also scale based on queue
+  - type: azure-queue
+    metadata:
+      queueName: background-jobs
+      queueLength: "20"
+      connectionFromEnv: AZURE_STORAGE_CONNECTION_STRING
+---
+# ===============================================================================
+# KEDA SCALEDOBJECT - Data Sync Service (Cosmos DB RU Consumption)
+# ===============================================================================
+# Scale based on Cosmos DB Request Units consumption
+# ===============================================================================
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: data-sync-scaler
+  namespace: production
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: data-sync-service
+  
+  minReplicaCount: 2
+  maxReplicaCount: 10
+  cooldownPeriod: 300
+  pollingInterval: 60
+  
+  triggers:
+  # Monitor Cosmos DB throttling (429 errors)
+  - type: prometheus
+    metadata:
+      serverAddress: http://prometheus.monitoring:9090
+      metricName: cosmosdb_throttling_rate
+      threshold: "10"  # Scale up when getting > 10 429s per minute
+      query: |
+        sum(rate(cosmosdb_requests_total{
+          namespace="production",
+          status_code="429"
+        }[1m])) by (database)
+  
+  # Monitor RU consumption percentage
+  - type: prometheus
+    metadata:
+      serverAddress: http://prometheus.monitoring:9090
+      metricName: cosmosdb_ru_usage_percent
+      threshold: "80"  # Scale up when RU usage > 80%
+      query: |
+        (cosmosdb_consumed_rus / cosmosdb_provisioned_rus) * 100

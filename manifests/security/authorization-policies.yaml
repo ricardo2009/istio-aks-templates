@@ -1,0 +1,202 @@
+# ===============================================================================
+# AUTHORIZATION POLICY - Default Deny All
+# ===============================================================================
+# Deny all traffic by default - explicit allow rules required
+# Security best practice: deny by default, allow explicitly
+# ===============================================================================
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: deny-all
+  namespace: production
+spec:
+  {}  # Empty spec = deny all
+---
+# ===============================================================================
+# AUTHORIZATION POLICY - Allow Ingress Gateway
+# ===============================================================================
+# Allow Istio Ingress Gateway to route to services
+# ===============================================================================
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-ingress-gateway
+  namespace: production
+spec:
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        principals:
+        - "cluster.local/ns/istio-system/sa/istio-ingressgateway-service-account"
+---
+# ===============================================================================
+# AUTHORIZATION POLICY - Product Service
+# ===============================================================================
+# Allow specific services to call product-service
+# ===============================================================================
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: product-service-authz
+  namespace: production
+spec:
+  selector:
+    matchLabels:
+      app: product-service
+  action: ALLOW
+  rules:
+  # Allow from API Gateway
+  - from:
+    - source:
+        principals:
+        - "cluster.local/ns/production/sa/api-gateway"
+    to:
+    - operation:
+        methods: ["GET", "POST", "PUT", "DELETE"]
+        paths: ["/api/products*"]
+  
+  # Allow from Frontend
+  - from:
+    - source:
+        principals:
+        - "cluster.local/ns/production/sa/frontend"
+    to:
+    - operation:
+        methods: ["GET"]
+        paths: ["/api/products*"]
+  
+  # Allow health checks from anywhere (for monitoring)
+  - to:
+    - operation:
+        methods: ["GET"]
+        paths: ["/health", "/ready"]
+---
+# ===============================================================================
+# AUTHORIZATION POLICY - User Service
+# ===============================================================================
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: user-service-authz
+  namespace: production
+spec:
+  selector:
+    matchLabels:
+      app: user-service
+  action: ALLOW
+  rules:
+  # Allow from API Gateway with JWT
+  - from:
+    - source:
+        principals:
+        - "cluster.local/ns/production/sa/api-gateway"
+    to:
+    - operation:
+        methods: ["GET", "POST", "PUT", "DELETE"]
+        paths: ["/api/users*"]
+    when:
+    - key: request.auth.claims[iss]
+      values: ["https://sts.windows.net/*"]  # Azure AD
+  
+  # Health checks
+  - to:
+    - operation:
+        methods: ["GET"]
+        paths: ["/health", "/ready"]
+---
+# ===============================================================================
+# AUTHORIZATION POLICY - Order Service
+# ===============================================================================
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: order-service-authz
+  namespace: production
+spec:
+  selector:
+    matchLabels:
+      app: order-service
+  action: ALLOW
+  rules:
+  # Allow from API Gateway
+  - from:
+    - source:
+        principals:
+        - "cluster.local/ns/production/sa/api-gateway"
+    to:
+    - operation:
+        methods: ["GET", "POST"]
+        paths: ["/api/orders*"]
+    when:
+    - key: request.auth.claims[sub]
+      notValues: [""]  # Must have authenticated user
+  
+  # Allow from Payment Service (for callbacks)
+  - from:
+    - source:
+        principals:
+        - "cluster.local/ns/production/sa/payment-service"
+    to:
+    - operation:
+        methods: ["POST"]
+        paths: ["/api/orders/*/payment-callback"]
+  
+  # Health checks
+  - to:
+    - operation:
+        methods: ["GET"]
+        paths: ["/health", "/ready"]
+---
+# ===============================================================================
+# AUTHORIZATION POLICY - Payment Service
+# ===============================================================================
+# Strictest policy - only allow from order service
+# ===============================================================================
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: payment-service-authz
+  namespace: production
+spec:
+  selector:
+    matchLabels:
+      app: payment-service
+  action: ALLOW
+  rules:
+  # Only allow from Order Service
+  - from:
+    - source:
+        principals:
+        - "cluster.local/ns/production/sa/order-service"
+    to:
+    - operation:
+        methods: ["POST"]
+        paths: ["/api/payments/process"]
+  
+  # Health checks
+  - to:
+    - operation:
+        methods: ["GET"]
+        paths: ["/health", "/ready"]
+---
+# ===============================================================================
+# AUTHORIZATION POLICY - Monitoring Access
+# ===============================================================================
+# Allow Prometheus to scrape metrics
+# ===============================================================================
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-prometheus-scraping
+  namespace: production
+spec:
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        namespaces: ["monitoring"]
+    to:
+    - operation:
+        methods: ["GET"]
+        paths: ["/metrics", "/stats/prometheus"]
