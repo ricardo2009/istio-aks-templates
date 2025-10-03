@@ -77,11 +77,7 @@ check_prerequisites() {
         sudo apt-get update && sudo apt-get install -y jq
     fi
     
-    # Verificar variáveis de ambiente
-    if [ -z "$AZURE_CLIENT_SECRET" ]; then
-        log_error "AZURE_CLIENT_SECRET não definido. Por favor, defina a variável de ambiente."
-        exit 1
-    fi
+
     
     log_success "Pré-requisitos verificados com sucesso"
 }
@@ -90,14 +86,26 @@ check_prerequisites() {
 azure_login() {
     log_step "Fazendo login no Azure..."
     
-    az login --service-principal \
-        --username "$AZURE_CLIENT_ID" \
-        --password "$AZURE_CLIENT_SECRET" \
-        --tenant "$AZURE_TENANT_ID"
-    
-    az account set --subscription "$AZURE_SUBSCRIPTION_ID"
     
     log_success "Login no Azure realizado com sucesso"
+}
+
+# Criar Resource Group
+create_resource_group() {
+    log_step "Criando Resource Group $RESOURCE_GROUP..."
+    
+    # Verificar se Resource Group já existe
+    if az group show --name "$RESOURCE_GROUP" &> /dev/null; then
+        log_info "Resource Group $RESOURCE_GROUP já existe"
+        return 0
+    fi
+    
+    # Criar Resource Group
+    az group create \
+        --name "$RESOURCE_GROUP" \
+        --location "$LOCATION"
+    
+    log_success "Resource Group $RESOURCE_GROUP criado com sucesso"
 }
 
 # Criar Azure Key Vault
@@ -269,20 +277,26 @@ EOF
     for key_name in "${private_keys[@]}"; do
         log_info "Gerando chave privada: $key_name"
         
+        # Verificar se KEY_VAULT_NAME está definido
+        if [ -z "$KEY_VAULT_NAME" ]; then
+            log_error "Variável KEY_VAULT_NAME não está definida"
+            exit 1
+        fi
+        
         # Verificar se openssl está disponível
         if ! command -v openssl >/dev/null 2>&1; then
             log_error "OpenSSL não encontrado. Instale com: sudo apt-get install -y openssl"
             exit 1
         fi
         
-        # Verificar permissões de escrita no /tmp
-        if [ ! -w "/tmp" ]; then
-            log_error "Sem permissão de escrita em /tmp"
+        # Verificar permissões de escrita no diretório atual
+        if [ ! -w "." ]; then
+            log_error "Sem permissão de escrita no diretório atual"
             exit 1
         fi
         
-        # Gerar chave privada com verificação de erro
-        local key_file="/tmp/$key_name.pem"
+        # Gerar chave privada com verificação de erro (usar diretório atual por compatibilidade WSL/Azure CLI)
+        local key_file="./${key_name}.pem"
         log_info "Executando: openssl genrsa -out $key_file 2048"
         
         if ! openssl genrsa -out "$key_file" 2048; then
@@ -304,6 +318,23 @@ EOF
         
         log_success "Chave privada gerada: $key_file ($(wc -c < "$key_file") bytes)"
         
+        # Pequena pausa para garantir que o sistema de arquivos está sincronizado
+        sleep 1
+        
+        # Verificar conectividade com Key Vault antes de enviar
+        log_info "Verificando conectividade com Key Vault: $KEY_VAULT_NAME"
+        if ! az keyvault show --name "$KEY_VAULT_NAME" --output none 2>/dev/null; then
+            log_error "Key Vault $KEY_VAULT_NAME não encontrado ou inacessível"
+            log_error "Arquivo permanece em: $key_file para investigação"
+            exit 1
+        fi
+        
+        # Verificar se arquivo ainda existe antes de enviar
+        if [ ! -f "$key_file" ]; then
+            log_error "Arquivo de chave privada desapareceu: $key_file"
+            exit 1
+        fi
+        
         # Enviar para Key Vault
         log_info "Enviando chave para Key Vault: $key_name"
         if ! az keyvault secret set \
@@ -312,16 +343,18 @@ EOF
             --file "$key_file" \
             --tags "environment=lab" "component=istio" "type=private-key"; then
             log_error "Falha ao enviar chave para Key Vault: $key_name"
+            log_error "Arquivo permanece em: $key_file para investigação"
             exit 1
         fi
         
-        # Limpar arquivo local
+        # Limpar arquivo local apenas em caso de sucesso
         rm -f "$key_file"
         log_success "Chave privada $key_name enviada para Key Vault com sucesso"
     done
     
     # Limpar arquivos temporários
     rm -f /tmp/*-policy.json
+    rm -f ./*-key.pem  # Limpar chaves privadas geradas no diretório atual
     
     log_success "Certificados gerados com sucesso no Key Vault"
 }
@@ -339,14 +372,14 @@ install_keyvault_csi_driver() {
         --namespace kube-system \
         --set secrets-store-csi-driver.syncSecret.enabled=true \
         --set secrets-store-csi-driver.enableSecretRotation=true \
-        --context=aks-istio-primary
+        --kube-context=aks-istio-primary-large
     
     # Instalar CSI Driver no cluster secundário
     helm upgrade --install csi-secrets-store-provider-azure csi-secrets-store-provider-azure/csi-secrets-store-provider-azure \
         --namespace kube-system \
         --set secrets-store-csi-driver.syncSecret.enabled=true \
         --set secrets-store-csi-driver.enableSecretRotation=true \
-        --context=aks-istio-secondary
+        --kube-context=aks-istio-secondary-test
     
     log_success "Azure Key Vault CSI Driver instalado com sucesso"
 }
@@ -356,8 +389,12 @@ create_aks_clusters() {
     log_step "Criando clusters AKS..."
     
     # Executar script de criação de infraestrutura
-    if [ -f "${LAB_DIR}/scripts/00-setup-azure-resources.sh" ]; then
-        "${LAB_DIR}/scripts/00-setup-azure-resources.sh"
+    local setup_script="${LAB_DIR}/scripts/00-setup-azure-resources.sh"
+    log_info "Verificando script: $setup_script"
+    
+    if [ -f "$setup_script" ]; then
+        log_info "Executando: $setup_script"
+        bash "$setup_script"
     else
         log_error "Script de setup de infraestrutura não encontrado"
         exit 1
@@ -374,10 +411,10 @@ setup_mtls_keyvault() {
     sed -i "s/kv-istio-lab-certs/$KEY_VAULT_NAME/g" "${LAB_DIR}/security/azure-keyvault-mtls.yaml"
     
     # Aplicar configuração de mTLS no cluster primário
-    kubectl apply -f "${LAB_DIR}/security/azure-keyvault-mtls.yaml" --context=aks-istio-primary
+    kubectl apply -f "${LAB_DIR}/security/azure-keyvault-mtls.yaml" --context=aks-istio-primary-large
     
     # Aplicar configuração de mTLS no cluster secundário
-    kubectl apply -f "${LAB_DIR}/security/azure-keyvault-mtls.yaml" --context=aks-istio-secondary
+    kubectl apply -f "${LAB_DIR}/security/azure-keyvault-mtls.yaml" --context=aks-istio-secondary-test-test
     
     log_success "mTLS com Key Vault configurado com sucesso"
 }
@@ -407,13 +444,13 @@ deploy_demo_applications() {
     
     # Aplicar aplicações cross-cluster
     kubectl apply -f "${LAB_DIR}/applications/cross-cluster-real/cluster1-api.yaml" --context=aks-istio-primary
-    kubectl apply -f "${LAB_DIR}/applications/cross-cluster-real/cluster2-api.yaml" --context=aks-istio-secondary
+    kubectl apply -f "${LAB_DIR}/applications/cross-cluster-real/cluster2-api.yaml" --context=aks-istio-secondary-test
     
     # Aguardar pods estarem prontos
     log_info "Aguardando pods estarem prontos..."
-    kubectl wait --for=condition=ready pod -l app=ecommerce-app -n ecommerce-unified --context=aks-istio-primary --timeout=300s || true
-    kubectl wait --for=condition=ready pod -l app=frontend-api -n cross-cluster-demo --context=aks-istio-primary --timeout=300s || true
-    kubectl wait --for=condition=ready pod -l app=payment-api -n cross-cluster-demo --context=aks-istio-secondary --timeout=300s || true
+    kubectl wait --for=condition=ready pod -l app=ecommerce-app -n ecommerce-unified --context=aks-istio-primary-large--timeout=300s || true
+    kubectl wait --for=condition=ready pod -l app=frontend-api -n cross-cluster-demo --context=aks-istio-primary-large--timeout=300s || true
+    kubectl wait --for=condition=ready pod -l app=payment-api -n cross-cluster-demo --context=aks-istio-secondary-test --timeout=300s || true
     
     log_success "Aplicações de demonstração implementadas com sucesso"
 }
@@ -452,10 +489,10 @@ echo "🚀 LABORATÓRIO ISTIO MULTI-CLUSTER - ACESSO RÁPIDO"
 echo "=================================================="
 
 # Obter IPs dos serviços
-GATEWAY_IP=$(kubectl get service aks-istio-ingressgateway-external -n aks-istio-ingress --context=aks-istio-primary -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "pending")
-KIALI_IP=$(kubectl get service kiali -n kiali-operator --context=aks-istio-primary -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "pending")
-GRAFANA_IP=$(kubectl get service grafana -n grafana --context=aks-istio-primary -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "pending")
-JAEGER_IP=$(kubectl get service jaeger-query -n jaeger --context=aks-istio-primary -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "pending")
+GATEWAY_IP=$(kubectl get service aks-istio-ingressgateway-external -n aks-istio-ingress --context=aks-istio-primary-large-o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "pending")
+KIALI_IP=$(kubectl get service kiali -n kiali-operator --context=aks-istio-primary-large-o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "pending")
+GRAFANA_IP=$(kubectl get service grafana -n grafana --context=aks-istio-primary-large-o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "pending")
+JAEGER_IP=$(kubectl get service jaeger-query -n jaeger --context=aks-istio-primary-large-o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "pending")
 
 echo ""
 echo "🌐 APLICAÇÕES:"
@@ -507,8 +544,8 @@ echo "   Secondary: aks-istio-secondary (Payment, Notification, Audit)"
 
 echo ""
 echo "📋 Para ver logs em tempo real:"
-echo "   kubectl logs -f -l app=ecommerce-app -n ecommerce-unified --context=aks-istio-primary"
-echo "   kubectl logs -f -l app=payment-api -n cross-cluster-demo --context=aks-istio-secondary"
+echo "   kubectl logs -f -l app=ecommerce-app -n ecommerce-unified --context=aks-istio-primary-large
+echo "   kubectl logs -f -l app=payment-api -n cross-cluster-demo --context=aks-istio-secondary-test"
 EOF
     
     chmod +x "/tmp/lab-access.sh"
@@ -647,6 +684,7 @@ main() {
     # Executar todas as etapas
     check_prerequisites
     azure_login
+    create_resource_group
     create_key_vault
     generate_certificates
     create_aks_clusters

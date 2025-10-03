@@ -42,7 +42,7 @@ AZURE_SUBSCRIPTION_ID="e8b8de74-8888-4318-a598-fbe78fb29c59"
 
 # Resource Groups
 RG_MAIN="lab-istio"
-RG_MONITORING="rg-istio-monitoring"
+RG_MONITORING="lab-istio"
 RG_NETWORKING="rg-istio-networking"
 
 # Locations
@@ -53,11 +53,11 @@ SECONDARY_LOCATION="eastus2"
 VNET_NAME="vnet-istio-lab"
 VNET_ADDRESS_SPACE="10.20.0.0/16"
 
-SUBNET_CLUSTER1="snet-cluster1"
-SUBNET_CLUSTER1_PREFIX="10.20.1.0/24"
+SUBNET_CLUSTER1="snet-aks-large"
+SUBNET_CLUSTER1_PREFIX="10.20.8.0/21"
 
-SUBNET_CLUSTER2="snet-cluster2"
-SUBNET_CLUSTER2_PREFIX="10.20.2.0/24"
+SUBNET_CLUSTER2="snet-aks-secondary"
+SUBNET_CLUSTER2_PREFIX="10.20.16.0/21"
 
 SUBNET_SERVICES="snet-services"
 SUBNET_SERVICES_PREFIX="10.20.3.0/24"
@@ -66,11 +66,11 @@ SUBNET_MONITORING="snet-monitoring"
 SUBNET_MONITORING_PREFIX="10.20.4.0/24"
 
 # AKS Configuration
-AKS_CLUSTER1="aks-istio-primary"
-AKS_CLUSTER2="aks-istio-secondary"
-AKS_NODE_COUNT=2
+AKS_CLUSTER1="aks-istio-primary-large"
+AKS_CLUSTER2="aks-istio-secondary-test"
+AKS_NODE_COUNT="3"
 AKS_NODE_SIZE="Standard_D2s_v3"
-AKS_K8S_VERSION="1.30.14"
+AKS_K8S_VERSION="1.31.7"
 
 # Monitoring
 LAW_NAME="law-istio-lab"
@@ -86,24 +86,19 @@ log_step "🚀 Iniciando setup dos recursos Azure para laboratório Istio AKS"
 # 🔐 Login no Azure
 log_step "🔐 Fazendo login no Azure..."
 if ! az account show &>/dev/null; then
-    log_info "Fazendo login no Azure..."
-    az login --service-principal \
-        --username "$AZURE_CLIENT_ID" \
-        --password "$AZURE_CLIENT_SECRET" \
-        --tenant "$AZURE_TENANT_ID" || {
-        log_error "Falha no login do Azure. Verifique as credenciais."
-        exit 1
-    }
+    log_error "Não está logado no Azure. Execute 'az login' primeiro."
+    exit 1
 fi
 
 # Set subscription
 az account set --subscription "$AZURE_SUBSCRIPTION_ID"
-log_success "Login realizado com sucesso na subscription: $AZURE_SUBSCRIPTION_ID"
+
+log_success "===== SETUP AZURE LOGIN COMPLETED SUCCESSFULLY ====="
 
 # 📊 Verificar quotas
 log_step "📊 Verificando quotas disponíveis..."
-CORES_AVAILABLE=$(az vm list-usage --location "$PRIMARY_LOCATION" --query "[?name.value=='cores'].currentValue | [0]" -o tsv)
-CORES_LIMIT=$(az vm list-usage --location "$PRIMARY_LOCATION" --query "[?name.value=='cores'].limit | [0]" -o tsv)
+CORES_AVAILABLE=$(az vm list-usage --location "$PRIMARY_LOCATION" --query "[?name.value=='cores'].currentValue | [0]" -o tsv | tr -d '\r')
+CORES_LIMIT=$(az vm list-usage --location "$PRIMARY_LOCATION" --query "[?name.value=='cores'].limit | [0]" -o tsv | tr -d '\r')
 CORES_NEEDED=8   # 2 nodes * 2 cores * 2 clusters
 
 log_info "Cores disponíveis: $((CORES_LIMIT - CORES_AVAILABLE)) de $CORES_LIMIT"
@@ -214,9 +209,9 @@ fi
 log_step "🏗️ Criando AKS Clusters..."
 
 # Get subnet IDs
-SUBNET1_ID=$(az network vnet subnet show --resource-group "$RG_NETWORKING" --vnet-name "$VNET_NAME" --name "$SUBNET_CLUSTER1" --query id -o tsv)
-SUBNET2_ID=$(az network vnet subnet show --resource-group "$RG_NETWORKING" --vnet-name "$VNET_NAME" --name "$SUBNET_CLUSTER2" --query id -o tsv)
-LAW_ID=$(az monitor log-analytics workspace show --resource-group "$RG_MONITORING" --workspace-name "$LAW_NAME" --query id -o tsv)
+SUBNET1_ID=$(az network vnet subnet show --resource-group "$RG_NETWORKING" --vnet-name "$VNET_NAME" --name "$SUBNET_CLUSTER1" --query id -o tsv | tr -d '\r')
+SUBNET2_ID=$(az network vnet subnet show --resource-group "$RG_NETWORKING" --vnet-name "$VNET_NAME" --name "$SUBNET_CLUSTER2" --query id -o tsv | tr -d '\r')
+LAW_ID=$(az monitor log-analytics workspace show --resource-group "$RG_MONITORING" --workspace-name "$LAW_NAME" --query id -o tsv | tr -d '\r')
 
 create_aks_cluster() {
     local cluster_name=$1
@@ -229,6 +224,22 @@ create_aks_cluster() {
     fi
     
     log_info "Criando AKS Cluster: $cluster_name (isso pode demorar 15-20 minutos)"
+    
+    # Verificar se o cluster já existe
+    if az aks show --resource-group "$RG_MAIN" --name "$cluster_name" >/dev/null 2>&1; then
+        log_warning "AKS Cluster $cluster_name já existe"
+        return 0
+    fi
+    
+    # Usar CIDR diferente para cada cluster para evitar conflitos
+    # DNS service IP deve estar dentro do service CIDR range
+    local service_cidr="10.96.0.0/12"
+    local dns_service_ip="10.96.0.10"
+    
+    if [[ "$cluster_name" == *"secondary"* ]]; then
+        service_cidr="10.112.0.0/12"
+        dns_service_ip="10.112.0.10"
+    fi
     
     az aks create \
         --resource-group "$RG_MAIN" \
@@ -244,30 +255,66 @@ create_aks_cluster() {
         --attach-acr "$ACR_NAME" \
         --network-plugin azure \
         --network-policy azure \
-        --service-cidr 172.16.0.0/16 \
-        --dns-service-ip 172.16.0.10 \
+        --service-cidr "$service_cidr" \
+        --dns-service-ip "$dns_service_ip" \
         --generate-ssh-keys \
+        --enable-cluster-autoscaler \
+        --min-count 1 \
+        --max-count 5 \
         --tags Environment=lab Project=istio-service-mesh CreatedBy=automation
     
-    log_success "AKS Cluster $cluster_name criado"
+    log_success "AKS Cluster $cluster_name criação iniciada"
+}
+
+# Wait for cluster creation to complete
+wait_for_cluster() {
+    local cluster_name=$1
+    local resource_group=$2
+    
+    log_info "Aguardando conclusão da criação do cluster $cluster_name..."
+    
+    # Aguardar até que o cluster esteja pronto
+    while true; do
+        local state=$(az aks show --resource-group "$resource_group" --name "$cluster_name" --query "provisioningState" -o tsv 2>/dev/null | tr -d '\r' || echo "NotFound")
+        
+        case $state in
+            "Succeeded")
+                log_success "AKS Cluster $cluster_name criado com sucesso"
+                break
+                ;;
+            "Failed")
+                log_error "Falha na criação do AKS Cluster $cluster_name"
+                return 1
+                ;;
+            "NotFound")
+                log_info "Cluster $cluster_name ainda não encontrado, aguardando..."
+                ;;
+            *)
+                log_info "Cluster $cluster_name em estado: $state, aguardando..."
+                ;;
+        esac
+        
+        sleep 30
+    done
     
     # Enable Istio add-on
     log_info "Habilitando Istio add-on no cluster $cluster_name"
-    az aks mesh enable --resource-group "$RG_MAIN" --name "$cluster_name"
-    log_success "Istio add-on habilitado no cluster $cluster_name"
+    if az aks mesh enable --resource-group "$resource_group" --name "$cluster_name"; then
+        log_success "Istio add-on habilitado no cluster $cluster_name"
+    else
+        log_warning "Falha ao habilitar Istio add-on no cluster $cluster_name (pode ser habilitado manualmente)"
+    fi
 }
 
 # Create clusters in parallel (background jobs)
 log_info "Iniciando criação dos clusters AKS em paralelo..."
-create_aks_cluster "$AKS_CLUSTER1" "$SUBNET1_ID" "$PRIMARY_LOCATION" &
-PID1=$!
-create_aks_cluster "$AKS_CLUSTER2" "$SUBNET2_ID" "$PRIMARY_LOCATION" &
-PID2=$!
+create_aks_cluster "$AKS_CLUSTER1" "$SUBNET1_ID" "$PRIMARY_LOCATION" 
+create_aks_cluster "$AKS_CLUSTER2" "$SUBNET2_ID" "$PRIMARY_LOCATION" 
 
-# Wait for both clusters to complete
-log_info "Aguardando conclusão da criação dos clusters..."
-wait $PID1
-wait $PID2
+# Wait for both clusters to complete (não necessário mais pois removemos --no-wait)
+log_info "Clusters AKS criados com sucesso!"
+# wait_for_cluster "$AKS_CLUSTER1" "$RG_MAIN"
+# wait_for_cluster "$AKS_CLUSTER2" "$RG_MAIN"
 
 # 📊 Criar Azure Monitor for Prometheus
 log_step "📊 Configurando Azure Monitor for Prometheus..."
@@ -305,8 +352,8 @@ link_cluster_to_prometheus "$AKS_CLUSTER2"
 log_step "🔐 Configurando RBAC..."
 
 # Get cluster identities
-CLUSTER1_IDENTITY=$(az aks show --resource-group "$RG_MAIN" --name "$AKS_CLUSTER1" --query identity.principalId -o tsv)
-CLUSTER2_IDENTITY=$(az aks show --resource-group "$RG_MAIN" --name "$AKS_CLUSTER2" --query identity.principalId -o tsv)
+CLUSTER1_IDENTITY=$(az aks show --resource-group "$RG_MAIN" --name "$AKS_CLUSTER1" --query identity.principalId -o tsv | tr -d '\r')
+CLUSTER2_IDENTITY=$(az aks show --resource-group "$RG_MAIN" --name "$AKS_CLUSTER2" --query identity.principalId -o tsv | tr -d '\r')
 
 # Assign Network Contributor role to clusters
 assign_network_role() {

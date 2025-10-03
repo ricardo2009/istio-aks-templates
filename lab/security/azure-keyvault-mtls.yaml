@@ -32,7 +32,7 @@ spec:
     usePodIdentity: "false"
     useVMManagedIdentity: "false"
     userAssignedIdentityID: "6f37088c-e465-472f-a2f0-ac45a3fd8e57"
-    keyvaultName: "kv-istio-lab-certs"
+    keyvaultName: "kvistio94726"
     tenantId: "03ebf151-fe12-4011-976d-d593ff5252a0"
     objects: |
       array:
@@ -80,7 +80,7 @@ spec:
     usePodIdentity: "false"
     useVMManagedIdentity: "false"
     userAssignedIdentityID: "6f37088c-e465-472f-a2f0-ac45a3fd8e57"
-    keyvaultName: "kv-istio-lab-certs"
+    keyvaultName: "kvistio94726"
     tenantId: "03ebf151-fe12-4011-976d-d593ff5252a0"
     objects: |
       array:
@@ -396,7 +396,7 @@ spec:
                 # Trigger certificate renewal in Key Vault
                 az login --identity --username $AZURE_CLIENT_ID
                 az keyvault certificate create \
-                  --vault-name kv-istio-lab-certs \
+                  --vault-name kvistio94726 \
                   --name istio-root-ca-cert \
                   --policy @/etc/cert-policy/policy.json
                 
