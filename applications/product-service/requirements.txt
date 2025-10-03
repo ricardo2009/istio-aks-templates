@@ -1,0 +1,71 @@
+# ===============================================================================
+# PRODUCT SERVICE - PYTHON DEPENDENCIES
+# ===============================================================================
+
+# Web Framework
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+gunicorn==21.2.0
+
+# Database
+azure-cosmos==4.5.1
+redis==5.0.1
+
+# Authentication & Security
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+python-multipart==0.0.6
+
+# Validation & Serialization
+pydantic==2.5.0
+pydantic-settings==2.1.0
+
+# HTTP Client
+httpx==0.25.2
+aiohttp==3.9.1
+
+# Caching
+aiocache==0.12.2
+
+# Monitoring & Observability
+prometheus-client==0.19.0
+opentelemetry-api==1.21.0
+opentelemetry-sdk==1.21.0
+opentelemetry-instrumentation-fastapi==0.42b0
+opentelemetry-instrumentation-httpx==0.42b0
+opentelemetry-instrumentation-redis==0.42b0
+opentelemetry-exporter-jaeger==1.21.0
+opentelemetry-exporter-prometheus==1.12.0rc1
+
+# Logging
+structlog==23.2.0
+python-json-logger==2.0.7
+
+# Configuration
+python-dotenv==1.0.0
+
+# Data Processing
+pandas==2.1.4
+numpy==1.25.2
+
+# Image Processing
+Pillow==10.1.0
+
+# Testing
+pytest==7.4.3
+pytest-asyncio==0.21.1
+pytest-cov==4.1.0
+httpx==0.25.2
+
+# Development
+black==23.11.0
+isort==5.12.0
+flake8==6.1.0
+mypy==1.7.1
+
+# Health Checks
+aiofiles==23.2.1
+
+# Utilities
+python-slugify==8.0.1
+email-validator==2.1.0

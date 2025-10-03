@@ -1,10 +1,38 @@
-# Manifests renderizados (output)
-manifests/
-test-output/
-debug-output/
-dist/
-build/
-out/
+# Terraform
+*.tfstate
+*.tfstate.*
+*.tfvars
+.terraform/
+.terraform.lock.hcl
+terraform.tfplan
+terraform.tfplan.*
+
+# Azure
+.azure/
+
+# Kubernetes
+kubeconfig
+*.kubeconfig
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
 # Python
 __pycache__/
@@ -12,59 +40,37 @@ __pycache__/
 *$py.class
 *.so
 .Python
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
 
-# Environment files
-.env
-.env.local
-.env.*.local
+# .NET
+bin/
+obj/
+*.user
+*.suo
+*.cache
+*.dll
+*.pdb
 
-# IDE files
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
+# Secrets
+secrets/
+*.key
+*.pem
+*.crt
+*.p12
 
-# OS files
-.DS_Store
-Thumbs.db
+# Load Testing Results
+load-testing/results/
+*.jmx.log
+
+# Monitoring
+grafana/data/
+prometheus/data/
 
 # Temporary files
 tmp/
 temp/
 *.tmp
-*.temp
-*.log
-
-# Helm
-charts/*.tgz
-
-# Kustomize
-kustomization.yaml.bak
-
-# Generated manifests
-generated/
-rendered/
-
-# Virtual environments
-.venv/
-venv/
-env/
-
-# Cluster access credentials
-aks-labs.config
-**/aks-labs.config
