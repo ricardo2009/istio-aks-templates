@@ -208,3 +208,55 @@ variable "log_analytics_retention_days" {
     error_message = "Log Analytics retention must be between 30 and 730 days."
   }
 }
+
+# APIM Configuration
+variable "apim_publisher_name" {
+  description = "Publisher name for Azure API Management"
+  type        = string
+  default     = "Enterprise Platform Team"
+}
+
+variable "apim_publisher_email" {
+  description = "Publisher email for Azure API Management"
+  type        = string
+  default     = "platform-team@company.com"
+}
+
+variable "apim_sku_name" {
+  description = "SKU for Azure API Management"
+  type        = string
+  default     = "Premium_1"
+  
+  validation {
+    condition = contains([
+      "Developer_1", "Standard_1", "Standard_2", 
+      "Premium_1", "Premium_2", "Premium_4", "Premium_8"
+    ], var.apim_sku_name)
+    error_message = "APIM SKU must be a valid value."
+  }
+}
+
+# Load Testing Extended Configuration
+variable "loadtest_min_count" {
+  description = "Minimum number of nodes for load testing cluster autoscaling"
+  type        = number
+  default     = 2
+}
+
+variable "loadtest_max_count" {
+  description = "Maximum number of nodes for load testing cluster autoscaling"
+  type        = number
+  default     = 20
+}
+
+variable "loadtest_service_cidr" {
+  description = "Service CIDR for load testing cluster"
+  type        = string
+  default     = "10.3.0.0/16"
+}
+
+variable "loadtest_dns_service_ip" {
+  description = "DNS service IP for load testing cluster"
+  type        = string
+  default     = "10.3.0.10"
+}

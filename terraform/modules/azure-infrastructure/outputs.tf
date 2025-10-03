@@ -30,19 +30,19 @@ output "vnet_address_space" {
 }
 
 # Subnets
-output "primary_subnet_id" {
+output "aks_primary_subnet_id" {
   description = "ID da subnet do cluster primário"
-  value       = azurerm_subnet.primary.id
+  value       = azurerm_subnet.aks_primary.id
 }
 
-output "secondary_subnet_id" {
+output "aks_secondary_subnet_id" {
   description = "ID da subnet do cluster secundário"
-  value       = azurerm_subnet.secondary.id
+  value       = azurerm_subnet.aks_secondary.id
 }
 
-output "loadtest_subnet_id" {
+output "aks_loadtest_subnet_id" {
   description = "ID da subnet do cluster de load testing"
-  value       = azurerm_subnet.loadtest.id
+  value       = azurerm_subnet.aks_loadtest.id
 }
 
 output "apim_subnet_id" {
@@ -55,19 +55,19 @@ output "gateway_subnet_id" {
   value       = azurerm_subnet.gateway.id
 }
 
-output "primary_subnet_cidr" {
+output "aks_primary_subnet_cidr" {
   description = "CIDR da subnet do cluster primário"
-  value       = azurerm_subnet.primary.address_prefixes[0]
+  value       = azurerm_subnet.aks_primary.address_prefixes[0]
 }
 
-output "secondary_subnet_cidr" {
+output "aks_secondary_subnet_cidr" {
   description = "CIDR da subnet do cluster secundário"
-  value       = azurerm_subnet.secondary.address_prefixes[0]
+  value       = azurerm_subnet.aks_secondary.address_prefixes[0]
 }
 
-output "loadtest_subnet_cidr" {
+output "aks_loadtest_subnet_cidr" {
   description = "CIDR da subnet do cluster de load testing"
-  value       = azurerm_subnet.loadtest.address_prefixes[0]
+  value       = azurerm_subnet.aks_loadtest.address_prefixes[0]
 }
 
 output "apim_subnet_cidr" {
@@ -175,3 +175,36 @@ output "private_dns_zones" {
     }
   }
 }
+
+# Individual Cluster Outputs for Compatibility
+output "aks_primary_name" {
+  description = "Nome do cluster AKS primário"
+  value       = azurerm_kubernetes_cluster.primary.name
+}
+
+output "aks_secondary_name" {
+  description = "Nome do cluster AKS secundário"
+  value       = azurerm_kubernetes_cluster.secondary.name
+}
+
+output "aks_loadtest_name" {
+  description = "Nome do cluster AKS de load testing"
+  value       = azurerm_kubernetes_cluster.loadtest.name
+}
+
+output "aks_primary_fqdn" {
+  description = "FQDN do cluster AKS primário"
+  value       = azurerm_kubernetes_cluster.primary.fqdn
+}
+
+output "aks_secondary_fqdn" {
+  description = "FQDN do cluster AKS secundário"
+  value       = azurerm_kubernetes_cluster.secondary.fqdn
+}
+
+output "aks_loadtest_fqdn" {
+  description = "FQDN do cluster AKS de load testing"
+  value       = azurerm_kubernetes_cluster.loadtest.fqdn
+}
+
+# Outputs duplicados removidos - já existem anteriormente no arquivo

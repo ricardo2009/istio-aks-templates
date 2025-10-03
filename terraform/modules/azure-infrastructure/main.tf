@@ -296,6 +296,49 @@ resource "azurerm_kubernetes_cluster" "secondary" {
   })
 }
 
+resource "azurerm_kubernetes_cluster" "loadtest" {
+  name                = "${var.prefix}-aks-loadtest"
+  location            = azurerm_resource_group.main.location
+  resource_group_name = azurerm_resource_group.main.name
+  dns_prefix          = "${var.prefix}-aks-loadtest"
+  kubernetes_version  = var.kubernetes_version
+
+  default_node_pool {
+    name                = "system"
+    node_count          = var.loadtest_node_count
+    vm_size             = var.loadtest_vm_size
+    vnet_subnet_id      = azurerm_subnet.aks_loadtest.id
+    type                = "VirtualMachineScaleSets"
+    enable_auto_scaling = true
+    min_count           = var.loadtest_min_count
+    max_count           = var.loadtest_max_count
+    os_disk_size_gb     = 100
+    os_disk_type        = "Managed"
+  }
+
+  identity {
+    type = "SystemAssigned"
+  }
+
+  network_profile {
+    network_plugin    = "azure"
+    network_policy    = "azure"
+    load_balancer_sku = "standard"
+    service_cidr      = var.loadtest_service_cidr
+    dns_service_ip    = var.loadtest_dns_service_ip
+  }
+
+  oms_agent {
+    log_analytics_workspace_id = azurerm_log_analytics_workspace.main.id
+  }
+
+  azure_policy_enabled = true
+
+  tags = merge(var.common_tags, {
+    Component = "AKS LoadTest"
+  })
+}
+
 # Role Assignments for ACR
 resource "azurerm_role_assignment" "aks_primary_acr" {
   principal_id                     = azurerm_kubernetes_cluster.primary.kubelet_identity[0].object_id
@@ -306,6 +349,13 @@ resource "azurerm_role_assignment" "aks_primary_acr" {
 
 resource "azurerm_role_assignment" "aks_secondary_acr" {
   principal_id                     = azurerm_kubernetes_cluster.secondary.kubelet_identity[0].object_id
+  role_definition_name             = "AcrPull"
+  scope                            = azurerm_container_registry.main.id
+  skip_service_principal_aad_check = true
+}
+
+resource "azurerm_role_assignment" "aks_loadtest_acr" {
+  principal_id                     = azurerm_kubernetes_cluster.loadtest.kubelet_identity[0].object_id
   role_definition_name             = "AcrPull"
   scope                            = azurerm_container_registry.main.id
   skip_service_principal_aad_check = true
