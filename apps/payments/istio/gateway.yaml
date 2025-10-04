@@ -1,0 +1,70 @@
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: payments-gateway
+  namespace: shop
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+  - port:
+      number: 80
+      name: http
+      protocol: HTTP
+    hosts:
+    - "*"
+---
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: payments
+  namespace: shop
+spec:
+  hosts:
+  - "*"
+  gateways:
+  - payments-gateway
+  http:
+  - match:
+    - uri:
+        prefix: /payments
+    route:
+    - destination:
+        host: payments
+        port:
+          number: 8080
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: payments
+  namespace: shop
+spec:
+  host: payments
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+---
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: shop
+spec:
+  mtls:
+    mode: STRICT
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: payments-authz
+  namespace: shop
+spec:
+  selector:
+    matchLabels:
+      app: payments
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        principals: ["cluster.local/ns/istio-system/sa/istio-ingressgateway-service-account"]
