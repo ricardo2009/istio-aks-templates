@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payments
+  namespace: shop
+  labels:
+    app: payments
+    version: v1
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: payments
+      version: v1
+  template:
+    metadata:
+      labels:
+        app: payments
+        version: v1
+    spec:
+      containers:
+      - name: payments
+        image: PLACEHOLDER:latest
+        ports:
+        - containerPort: 8080
+          name: http
+        env:
+        - name: PORT
+          value: "8080"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: payments
+  namespace: shop
+  labels:
+    app: payments
+spec:
+  ports:
+  - port: 8080
+    targetPort: 8080
+    name: http
+  selector:
+    app: payments

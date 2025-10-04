@@ -1,0 +1,85 @@
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: orders-gateway
+  namespace: shop
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+  - port:
+      number: 80
+      name: http
+      protocol: HTTP
+    hosts:
+    - "*"
+---
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: orders
+  namespace: shop
+spec:
+  hosts:
+  - "*"
+  gateways:
+  - orders-gateway
+  http:
+  - match:
+    - uri:
+        prefix: /orders
+    route:
+    - destination:
+        host: orders
+        port:
+          number: 8080
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: orders
+  namespace: shop
+spec:
+  host: orders
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+---
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: shop
+spec:
+  mtls:
+    mode: STRICT
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: orders-authz
+  namespace: shop
+spec:
+  selector:
+    matchLabels:
+      app: orders
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        principals: ["cluster.local/ns/istio-system/sa/istio-ingressgateway-service-account"]
+---
+apiVersion: networking.istio.io/v1beta1
+kind: ServiceEntry
+metadata:
+  name: apim-egress
+  namespace: shop
+spec:
+  hosts:
+  - "*.azure-api.net"
+  ports:
+  - number: 443
+    name: https
+    protocol: HTTPS
+  location: MESH_EXTERNAL
+  resolution: DNS
