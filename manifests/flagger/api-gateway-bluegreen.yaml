@@ -1,0 +1,178 @@
+# ===============================================================================
+# FLAGGER CANARY - API Gateway (Blue-Green Deployment)
+# ===============================================================================
+# Blue-Green deployment for API Gateway
+# - Instant traffic switch
+# - Pre-production validation
+# - Quick rollback capability
+# ===============================================================================
+apiVersion: flagger.app/v1beta1
+kind: Canary
+metadata:
+  name: api-gateway
+  namespace: production
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: api-gateway
+  
+  provider: istio
+  
+  service:
+    port: 8080
+    targetPort: 8080
+    gateways:
+    - istio-system/public-gateway
+    hosts:
+    - api.example.com
+    trafficPolicy:
+      tls:
+        mode: ISTIO_MUTUAL
+  
+  # Blue-Green configuration
+  analysis:
+    iterations: 10
+    threshold: 2
+    
+    # Instant switch (100% traffic)
+    stepWeight: 100
+    stepWeightPromotion: 100
+    
+    # Validation metrics
+    metrics:
+    - name: request-success-rate
+      templateRef:
+        name: request-success-rate
+        namespace: flagger-system
+      thresholdRange:
+        min: 99
+      interval: 1m
+    
+    - name: request-duration
+      templateRef:
+        name: request-duration
+        namespace: flagger-system
+      thresholdRange:
+        max: 1000  # API Gateway has higher timeout
+      interval: 1m
+    
+    # Comprehensive testing before switch
+    webhooks:
+    - name: comprehensive-test
+      type: pre-rollout
+      url: http://flagger-loadtester.flagger-system/
+      timeout: 60s
+      metadata:
+        type: bash
+        cmd: |
+          # Health checks
+          curl -sf http://api-gateway-canary.production:8080/health || exit 1
+          
+          # Test all major endpoints
+          curl -sf http://api-gateway-canary.production:8080/api/products || exit 1
+          curl -sf http://api-gateway-canary.production:8080/api/users || exit 1
+          curl -sf http://api-gateway-canary.production:8080/api/orders || exit 1
+          
+          # Performance test
+          hey -z 30s -q 50 -c 5 http://api-gateway-canary.production:8080/api/products
+---
+# ===============================================================================
+# FLAGGER CANARY - Frontend (A/B Testing)
+# ===============================================================================
+# A/B testing for frontend changes
+# - Route beta users to canary version
+# - Production users stay on stable version
+# ===============================================================================
+apiVersion: flagger.app/v1beta1
+kind: Canary
+metadata:
+  name: frontend
+  namespace: production
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: frontend
+  
+  provider: istio
+  
+  service:
+    port: 3000
+    targetPort: 3000
+    gateways:
+    - istio-system/public-gateway
+    hosts:
+    - app.example.com
+    trafficPolicy:
+      tls:
+        mode: ISTIO_MUTUAL
+  
+  # A/B Testing configuration
+  analysis:
+    interval: 1m
+    threshold: 10
+    iterations: 10
+    
+    # Traffic routing based on headers
+    match:
+    - headers:
+        x-user-type:
+          exact: "beta"  # Beta users get canary
+    
+    # Validation metrics
+    metrics:
+    - name: request-success-rate
+      templateRef:
+        name: request-success-rate
+        namespace: flagger-system
+      thresholdRange:
+        min: 99
+      interval: 1m
+    
+    - name: request-duration
+      templateRef:
+        name: request-duration
+        namespace: flagger-system
+      thresholdRange:
+        max: 2000  # Frontend can tolerate slightly higher latency
+      interval: 1m
+    
+    # Custom metric - JavaScript errors
+    - name: javascript-errors
+      thresholdRange:
+        max: 5  # Max 5% of page loads with JS errors
+      interval: 1m
+      query: |
+        sum(
+          rate(
+            frontend_javascript_errors_total{
+              namespace="production",
+              version="canary"
+            }[1m]
+          )
+        )
+        /
+        sum(
+          rate(
+            frontend_page_loads_total{
+              namespace="production",
+              version="canary"
+            }[1m]
+          )
+        ) * 100
+    
+    webhooks:
+    - name: ui-test
+      type: pre-rollout
+      url: http://flagger-loadtester.flagger-system/
+      timeout: 60s
+      metadata:
+        type: bash
+        cmd: |
+          # Smoke test frontend
+          curl -sf http://frontend-canary.production:3000/ | grep -q "<!DOCTYPE html>" || exit 1
+          
+          # Check critical resources load
+          curl -sf http://frontend-canary.production:3000/static/js/main.js || exit 1
+          curl -sf http://frontend-canary.production:3000/static/css/main.css || exit 1

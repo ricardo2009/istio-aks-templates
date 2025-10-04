@@ -1,11 +1,22 @@
 # Terraform
 *.tfstate
 *.tfstate.*
-*.tfvars
+*.tfstate.backup
 .terraform/
-.terraform.lock.hcl
 terraform.tfplan
 terraform.tfplan.*
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
+# IMPORTANT: Keep terraform.lock.hcl in version control
+# IMPORTANT: Keep env/*.tfvars in version control for 100% parameterization
+!terraform.lock.hcl
+!terraform/env/*.tfvars
 
 # Azure
 .azure/

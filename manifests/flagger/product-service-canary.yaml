@@ -1,0 +1,208 @@
+# ===============================================================================
+# FLAGGER CANARY - Product Service
+# ===============================================================================
+# Progressive canary deployment with automatic rollback based on SLOs
+# - 10% traffic increments every minute
+# - Success rate must be > 99%
+# - P95 latency must be < 500ms
+# - Error rate must be < 1%
+# ===============================================================================
+apiVersion: flagger.app/v1beta1
+kind: Canary
+metadata:
+  name: product-service
+  namespace: production
+spec:
+  # Target deployment to manage
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: product-service
+  
+  # Service mesh provider
+  provider: istio
+  
+  # HPA reference (optional - Flagger will update it)
+  autoscalerRef:
+    apiVersion: autoscaling/v2
+    kind: HorizontalPodAutoscaler
+    name: product-service
+  
+  # Service configuration
+  service:
+    port: 8080
+    targetPort: 8080
+    portDiscovery: true
+    gateways:
+    - istio-system/public-gateway
+    hosts:
+    - product-service.example.com
+    trafficPolicy:
+      tls:
+        mode: ISTIO_MUTUAL  # Use mTLS
+  
+  # Canary analysis configuration
+  analysis:
+    # Check interval
+    interval: 1m
+    
+    # Number of checks before rollback
+    threshold: 5
+    
+    # Max traffic weight for canary
+    maxWeight: 50
+    
+    # Traffic increment per interval
+    stepWeight: 10
+    
+    # Metrics to validate
+    metrics:
+    
+    # 1. Request Success Rate (must be > 99%)
+    - name: request-success-rate
+      templateRef:
+        name: request-success-rate
+        namespace: flagger-system
+      thresholdRange:
+        min: 99
+      interval: 1m
+    
+    # 2. Request Duration P95 (must be < 500ms)
+    - name: request-duration
+      templateRef:
+        name: request-duration
+        namespace: flagger-system
+      thresholdRange:
+        max: 500
+      interval: 1m
+    
+    # 3. Custom Prometheus Query - Error Rate
+    - name: error-rate
+      thresholdRange:
+        max: 1  # Max 1% errors
+      interval: 1m
+      query: |
+        100 - sum(
+          rate(
+            istio_requests_total{
+              reporter="destination",
+              destination_workload_namespace="production",
+              destination_workload=~"product-service-canary",
+              response_code!~"5.."
+            }[1m]
+          )
+        )
+        /
+        sum(
+          rate(
+            istio_requests_total{
+              reporter="destination",
+              destination_workload_namespace="production",
+              destination_workload=~"product-service-canary"
+            }[1m]
+          )
+        ) * 100
+    
+    # Webhooks for testing
+    webhooks:
+    
+    # Pre-rollout smoke test
+    - name: smoke-test
+      type: pre-rollout
+      url: http://flagger-loadtester.flagger-system/
+      timeout: 30s
+      metadata:
+        type: bash
+        cmd: |
+          curl -sf http://product-service-canary.production:8080/health || exit 1
+          curl -sf http://product-service-canary.production:8080/ready || exit 1
+    
+    # Load test during rollout
+    - name: load-test
+      type: rollout
+      url: http://flagger-loadtester.flagger-system/
+      timeout: 5s
+      metadata:
+        type: cmd
+        cmd: "hey -z 1m -q 100 -c 2 http://product-service-canary.production:8080/api/products"
+    
+    # Integration test
+    - name: integration-test
+      type: rollout
+      url: http://flagger-loadtester.flagger-system/
+      timeout: 30s
+      metadata:
+        type: bash
+        cmd: |
+          # Test GET products
+          curl -sf http://product-service-canary.production:8080/api/products | jq -e '.products | length > 0' || exit 1
+          
+          # Test GET product by ID
+          curl -sf http://product-service-canary.production:8080/api/products/1 | jq -e '.id == 1' || exit 1
+    
+    # Post-rollout notification (optional)
+    - name: send-notification
+      type: post-rollout
+      url: http://notification-service.monitoring/webhook
+      timeout: 5s
+      metadata:
+        message: "Product service canary rollout completed"
+---
+# ===============================================================================
+# FLAGGER METRIC TEMPLATE - Request Success Rate
+# ===============================================================================
+apiVersion: flagger.app/v1beta1
+kind: MetricTemplate
+metadata:
+  name: request-success-rate
+  namespace: flagger-system
+spec:
+  provider:
+    type: prometheus
+    address: http://prometheus.monitoring:9090
+  query: |
+    sum(
+      rate(
+        istio_requests_total{
+          reporter="destination",
+          destination_workload_namespace="{{ namespace }}",
+          destination_workload=~"{{ target }}-canary",
+          response_code!~"5.."
+        }[{{ interval }}]
+      )
+    )
+    /
+    sum(
+      rate(
+        istio_requests_total{
+          reporter="destination",
+          destination_workload_namespace="{{ namespace }}",
+          destination_workload=~"{{ target }}-canary"
+        }[{{ interval }}]
+      )
+    ) * 100
+---
+# ===============================================================================
+# FLAGGER METRIC TEMPLATE - Request Duration P95
+# ===============================================================================
+apiVersion: flagger.app/v1beta1
+kind: MetricTemplate
+metadata:
+  name: request-duration
+  namespace: flagger-system
+spec:
+  provider:
+    type: prometheus
+    address: http://prometheus.monitoring:9090
+  query: |
+    histogram_quantile(0.95,
+      sum(
+        rate(
+          istio_request_duration_milliseconds_bucket{
+            reporter="destination",
+            destination_workload_namespace="{{ namespace }}",
+            destination_workload=~"{{ target }}-canary"
+          }[{{ interval }}]
+        )
+      ) by (le)
+    )
